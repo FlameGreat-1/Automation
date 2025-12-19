@@ -325,6 +325,7 @@ class SeleniumGoogleSearcher:
             logger.error(f"  ✗ Unexpected error: {e}")
             return {"base_url": None, "sub_urls": [], "additional_urls": []}
 
+
     def process_companies(self, max_names: Optional[int] = None) -> Dict[str, int]:
         """
         Process companies from database
@@ -368,7 +369,7 @@ class SeleniumGoogleSearcher:
                         logger.info(f"  ✓ Base URL: {result['base_url']}")
                         
                         # Update base_url in companies table
-                        self.db.update_company_status(company_id, company_name, result['base_url'], 'found')
+                        self.db.update_company_status(company_id, result['base_url'], 'found')
                         
                         # Insert sub-URLs with labels
                         if result['sub_urls']:
@@ -376,19 +377,19 @@ class SeleniumGoogleSearcher:
                             for idx, url in enumerate(result['sub_urls'], 1):
                                 label = detect_url_label(url)
                                 logger.info(f"    {idx}. [{label}] {url}")
-                            self.db.insert_sub_urls(company_id, company_name, result['sub_urls'])
+                            self.db.insert_sub_urls(company_id, result['sub_urls'])
                         
                         # Insert additional URLs
                         if result['additional_urls']:
                             logger.info(f"  ✓ Additional URLs found: {len(result['additional_urls'])}")
                             for idx, url in enumerate(result['additional_urls'], 1):
                                 logger.info(f"    {idx}. {url}")
-                            self.db.insert_additional_urls(company_id, company_name, result['additional_urls'])
+                            self.db.insert_additional_urls(company_id, result['additional_urls'])
                         
                         found_count += 1
                     else:
                         logger.info(f"  ✗ No website found")
-                        self.db.update_company_status(company_id, company_name, None, 'not_found')
+                        self.db.update_company_status(company_id, None, 'not_found')
                         not_found_count += 1
                     
                     # Delay between searches
@@ -397,7 +398,7 @@ class SeleniumGoogleSearcher:
                 
                 except Exception as e:
                     logger.error(f"  ✗ Error processing company '{company_name}': {e}")
-                    self.db.update_company_status(company_id, company_name, None, 'error')
+                    self.db.update_company_status(company_id, None, 'error')
                     error_count += 1
             
             perf_metrics = self.performance_tracker.end_batch()
@@ -422,7 +423,6 @@ class SeleniumGoogleSearcher:
 def main():
     """Main execution function with configurable batch size"""
     
-    # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Company URL Finder - Scrape company websites')
     parser.add_argument('-b', '--batch', type=int, default=None, 
                        help='Number of companies to process (default: interactive menu)')
@@ -434,7 +434,6 @@ def main():
     print("  COMPANY URL FINDER - DATABASE VERSION")
     print("=" * 70 + "\n")
     
-    # Interactive batch size selection if not provided via command line
     batch_size = args.batch
     
     if batch_size is None:
@@ -458,7 +457,7 @@ def main():
         elif choice == '4':
             batch_size = 200
         elif choice == '5':
-            batch_size = None  # Process all
+            batch_size = None
         elif choice == '6':
             try:
                 batch_size = int(input("Enter number of companies: ").strip())
@@ -477,21 +476,17 @@ def main():
     else:
         print(f"\n📊 Processing ALL pending companies\n")
     
-    # Determine headless mode
     if args.headless:
         headless_mode = True
         print("🔧 Headless mode: Enabled (from command-line)")
     else:
-        # Read from .env
         headless_env = os.getenv('HEADLESS_MODE', 'false').lower()
         headless_mode = headless_env in ['true', '1', 'yes']
         print(f"🔧 Headless mode: {'Enabled' if headless_mode else 'Disabled'} (from .env)")
     
-    # Create searcher with determined headless mode
     searcher = SeleniumGoogleSearcher(headless=headless_mode)
     
     try:
-        # Show initial statistics
         stats = searcher.db.get_statistics()
         print(f"\nDatabase Statistics:")
         print(f"  Total companies: {stats.get('total_companies', 0)}")
@@ -499,11 +494,12 @@ def main():
         print(f"  Found: {stats.get('found', 0)}")
         print(f"  Not found: {stats.get('not_found', 0)}")
         print(f"  Errors: {stats.get('error', 0)}")
-        print(f"  Total sub URLs: {stats.get('total_sub_urls', 0)}")
-        print(f"  Total additional URLs: {stats.get('total_additional_urls', 0)}")
+        print(f"  Total URLs: {stats.get('total_urls', 0)}")
+        print(f"    └─ Base URLs: {stats.get('base_urls', 0)}")
+        print(f"    └─ Sub URLs: {stats.get('sub_urls', 0)}")
+        print(f"    └─ Additional URLs: {stats.get('additional_urls', 0)}")
         print()
         
-        # Process companies with configurable batch size
         result = searcher.process_companies(max_names=batch_size)
         
         print(f"\n{'='*70}")
@@ -519,14 +515,15 @@ def main():
             print(f"Total Duration: {perf['total_duration_seconds']:.2f} seconds")
             print(f"Average per Company: {perf['average_time_per_company']:.2f} seconds")
         
-        # Show final statistics
         final_stats = searcher.db.get_statistics()
         print(f"\nFinal Database Statistics:")
         print(f"  Pending: {final_stats.get('pending', 0)}")
         print(f"  Found: {final_stats.get('found', 0)}")
         print(f"  Not found: {final_stats.get('not_found', 0)}")
-        print(f"  Total sub URLs: {final_stats.get('total_sub_urls', 0)}")
-        print(f"  Total additional URLs: {final_stats.get('total_additional_urls', 0)}")
+        print(f"  Total URLs: {final_stats.get('total_urls', 0)}")
+        print(f"    └─ Base URLs: {final_stats.get('base_urls', 0)}")
+        print(f"    └─ Sub URLs: {final_stats.get('sub_urls', 0)}")
+        print(f"    └─ Additional URLs: {final_stats.get('additional_urls', 0)}")
         
         print(f"{'='*70}")
     
@@ -535,7 +532,7 @@ def main():
         print(f"\nAn error occurred: {e}")
     
     finally:
-        pass  # Database connection managed by CompaniesDB context manager
+        pass
 
 
 if __name__ == "__main__":

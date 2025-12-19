@@ -1,7 +1,7 @@
 """
 Companies Database Manager
 Handles all database operations for Company URL Finder
-Manages: companies, company_sub_urls, company_additional_urls tables
+Manages: companies, urls tables (unified structure)
 """
 
 import os
@@ -13,7 +13,6 @@ from typing import List, Dict, Optional, Tuple
 from dotenv import load_dotenv
 from mysql.connector import Error
 
-# Parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.connection import get_connection, get_cursor, execute_query
@@ -31,60 +30,45 @@ class CompaniesDB:
         self.json_file = os.getenv('COMPANIES_JSON_FILE')
     
     def create_tables(self) -> bool:
-        """Create all required tables for company URL finder"""
+        """Create all required tables for company URL finder - unified structure"""
         try:
-            logger.info("📋 Creating company tables...")
+            logger.info("📋 Creating company tables (unified structure)...")
             
             with get_cursor() as cursor:
-                # Table 1: Companies (main table)
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS companies (
                         company_id INT AUTO_INCREMENT PRIMARY KEY,
                         company_name VARCHAR(500) NOT NULL UNIQUE,
-                        base_url VARCHAR(2048) DEFAULT NULL,
                         status VARCHAR(50) DEFAULT 'pending',
+                        contact_scraped TINYINT(1) DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                         INDEX idx_company_name (company_name),
-                        INDEX idx_status (status)
+                        INDEX idx_status (status),
+                        INDEX idx_contact_scraped (contact_scraped)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """)
                 logger.info("  ✓ Table 'companies' created/verified")
 
-                # Table 2: Company Sub URLs
                 cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS company_sub_urls (
+                    CREATE TABLE IF NOT EXISTS urls (
                         id INT AUTO_INCREMENT PRIMARY KEY,
                         company_id INT NOT NULL,
-                        company_name VARCHAR(500) NOT NULL,
-                        sub_url VARCHAR(2048) NOT NULL,
-                        label VARCHAR(100) DEFAULT 'Other',
-                        form BOOLEAN DEFAULT 0,
+                        url VARCHAR(2048) NOT NULL,
+                        category ENUM('base', 'sub', 'additional') NOT NULL,
+                        label VARCHAR(100) DEFAULT NULL,
+                        form TINYINT(1) DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE,
                         INDEX idx_company_id (company_id),
+                        INDEX idx_url (url(255)),
+                        INDEX idx_category (category),
                         INDEX idx_label (label),
-                        INDEX idx_company_name (company_name),
-                        INDEX idx_sub_url (sub_url(255)),
-                        INDEX idx_form (form)
+                        INDEX idx_form (form),
+                        INDEX idx_category_form (category, form)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """)
-                logger.info("  ✓ Table 'company_sub_urls' created/verified")
-                
-                # Table 3: Company Additional URLs
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS company_additional_urls (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        company_id INT NOT NULL,
-                        company_name VARCHAR(500) NOT NULL,
-                        additional_url VARCHAR(2048) NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE,
-                        INDEX idx_company_id (company_id),
-                        INDEX idx_company_name (company_name)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-                """)
-                logger.info("  ✓ Table 'company_additional_urls' created/verified")
+                logger.info("  ✓ Table 'urls' created/verified (unified structure)")
             
             logger.info("✓ All company tables created successfully!\n")
             return True
@@ -94,15 +78,7 @@ class CompaniesDB:
             return False
     
     def load_companies_from_json(self, json_file: str = None) -> bool:
-        """
-        Load company names from JSON file into database
-        
-        Args:
-            json_file: Path to JSON file (uses .env if not provided)
-            
-        Returns:
-            bool: True if successful
-        """
+        """Load company names from JSON file into database"""
         try:
             if json_file is None:
                 json_file = self.json_file
@@ -131,8 +107,8 @@ class CompaniesDB:
                 for company_name in companies:
                     try:
                         cursor.execute("""
-                            INSERT INTO companies (company_name, base_url, status)
-                            VALUES (%s, NULL, 'pending')
+                            INSERT INTO companies (company_name, status)
+                            VALUES (%s, 'pending')
                             ON DUPLICATE KEY UPDATE company_name = company_name
                         """, (company_name,))
                         
@@ -161,15 +137,7 @@ class CompaniesDB:
             return False
     
     def get_pending_companies(self, limit: int = None) -> List[Tuple[int, str]]:
-        """
-        Get companies that need URL scraping
-        
-        Args:
-            limit: Maximum number of companies to return
-            
-        Returns:
-            List of tuples: [(company_id, company_name), ...]
-        """
+        """Get companies that need URL scraping"""
         try:
             query = """
                 SELECT company_id, company_name
@@ -182,34 +150,28 @@ class CompaniesDB:
                 query += f" LIMIT {limit}"
             
             results = execute_query(query, fetch=True)
-            
-            # Return list of tuples (company_id, company_name)
             return [(row[0], row[1]) for row in results]
             
         except Error as e:
             logger.error(f"✗ Error fetching pending companies: {e}")
             return []
     
-    def update_company_status(self, company_id: int, company_name: str, base_url: str, status: str) -> bool:
-        """
-        Update company status and base URL
-        
-        Args:
-            company_id: Company ID
-            company_name: Company name (for logging)
-            base_url: Base URL if found (or None)
-            status: New status (found/not_found/error)
-            
-        Returns:
-            bool: True if successful
-        """
+    def update_company_status(self, company_id: int, base_url: str, status: str) -> bool:
+        """Update company status and insert base URL into urls table"""
         try:
             with get_cursor() as cursor:
                 cursor.execute("""
                     UPDATE companies
-                    SET status = %s, base_url = %s
+                    SET status = %s
                     WHERE company_id = %s
-                """, (status, base_url, company_id))
+                """, (status, company_id))
+                
+                if base_url:
+                    cursor.execute("""
+                        INSERT INTO urls (company_id, url, category, label, form)
+                        VALUES (%s, %s, 'base', 'base', 0)
+                        ON DUPLICATE KEY UPDATE url = VALUES(url)
+                    """, (company_id, base_url))
             
             return True
             
@@ -217,63 +179,42 @@ class CompaniesDB:
             logger.error(f"✗ Error updating company {company_id}: {e}")
             return False
 
-    def insert_sub_urls(self, company_id: int, company_name: str, sub_urls: List[str]) -> bool:
-        """
-        Insert sub URLs for a company with auto-detected labels
-        
-        Args:
-            company_id: Company ID
-            company_name: Company name
-            sub_urls: List of URL strings
-            
-        Returns:
-            bool: True if successful
-        """
+    def insert_sub_urls(self, company_id: int, sub_urls: List[str]) -> bool:
+        """Insert sub URLs for a company into urls table"""
         try:
             if not sub_urls:
                 return True
             
-            # Detect labels for each URL
-            data = [(company_id, company_name, url, detect_url_label(url)) for url in sub_urls]
+            data = [(company_id, url, 'sub', detect_url_label(url), 0) for url in sub_urls]
             
             with get_cursor() as cursor:
                 cursor.executemany("""
-                    INSERT INTO company_sub_urls (company_id, company_name, sub_url, label)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO urls (company_id, url, category, label, form)
+                    VALUES (%s, %s, %s, %s, %s)
                 """, data)
             
-            logger.debug(f"  ✓ Inserted {len(sub_urls)} sub URLs for {company_name}")
+            logger.debug(f"  ✓ Inserted {len(sub_urls)} sub URLs for company_id {company_id}")
             return True
             
         except Error as e:
             logger.error(f"✗ Error inserting sub URLs: {e}")
             return False
-    
-    def insert_additional_urls(self, company_id: int, company_name: str, additional_urls: List[str]) -> bool:
-        """
-        Insert additional URLs for a company
-        
-        Args:
-            company_id: Company ID
-            company_name: Company name
-            additional_urls: List of URL strings
-            
-        Returns:
-            bool: True if successful
-        """
+
+    def insert_additional_urls(self, company_id: int, additional_urls: List[str]) -> bool:
+        """Insert additional URLs for a company into urls table"""
         try:
             if not additional_urls:
                 return True
             
-            data = [(company_id, company_name, url) for url in additional_urls]
+            data = [(company_id, url, 'additional', 'none', 0) for url in additional_urls]
             
             with get_cursor() as cursor:
                 cursor.executemany("""
-                    INSERT INTO company_additional_urls (company_id, company_name, additional_url)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO urls (company_id, url, category, label, form)
+                    VALUES (%s, %s, %s, %s, %s)
                 """, data)
             
-            logger.debug(f"  ✓ Inserted {len(additional_urls)} additional URLs for {company_name}")
+            logger.debug(f"  ✓ Inserted {len(additional_urls)} additional URLs for company_id {company_id}")
             return True
             
         except Error as e:
@@ -281,39 +222,18 @@ class CompaniesDB:
             return False
     
     def get_sub_urls(self, company_id: int) -> List[Dict]:
-        """
-        Get all sub URLs for a specific company
-        
-        Args:
-            company_id: Company ID to fetch sub URLs for
-            
-        Returns:
-            List of dictionaries containing sub URL data:
-            [
-                {
-                    'id': int,
-                    'company_id': int,
-                    'company_name': str,
-                    'sub_url': str,
-                    'label': str,
-                    'form': bool,
-                    'created_at': datetime
-                },
-                ...
-            ]
-        """
+        """Get all sub URLs for a specific company from urls table"""
         try:
             query = """
                 SELECT 
                     id,
                     company_id,
-                    company_name,
-                    sub_url,
+                    url,
                     label,
                     form,
                     created_at
-                FROM company_sub_urls
-                WHERE company_id = %s
+                FROM urls
+                WHERE company_id = %s AND category = 'sub'
                 ORDER BY id ASC
             """
             
@@ -328,11 +248,10 @@ class CompaniesDB:
                 sub_urls.append({
                     'id': row[0],
                     'company_id': row[1],
-                    'company_name': row[2],
-                    'sub_url': row[3],
-                    'label': row[4],
-                    'form': bool(row[5]),
-                    'created_at': row[6]
+                    'url': row[2],
+                    'label': row[3],
+                    'form': bool(row[4]),
+                    'created_at': row[5]
                 })
             
             logger.debug(f"Retrieved {len(sub_urls)} sub URLs for company_id {company_id}")
@@ -346,37 +265,25 @@ class CompaniesDB:
             return []
 
     def update_sub_url_form(self, sub_url: str, has_form: bool) -> bool:
-        """
-        Update the form column for a specific sub URL
-        Handles trailing slash differences by normalizing URLs
-        
-        Args:
-            sub_url: The sub URL to update
-            has_form: True if form found on this URL, False otherwise
-            
-        Returns:
-            bool: True if update successful, False otherwise
-        """
+        """Update the form column for a specific URL in urls table"""
         try:
             form_value = 1 if has_form else 0
-            
-
             normalized_input = sub_url.rstrip('/').lower()
             
             with get_cursor() as cursor:
                 cursor.execute("""
-                    UPDATE company_sub_urls
+                    UPDATE urls
                     SET form = %s
-                    WHERE LOWER(TRIM(TRAILING '/' FROM sub_url)) = %s
+                    WHERE LOWER(TRIM(TRAILING '/' FROM url)) = %s
                 """, (form_value, normalized_input))
                 
                 rows_affected = cursor.rowcount
                 
                 if rows_affected > 0:
-                    logger.debug(f"✓ Updated form={form_value} for sub_url: {sub_url} ({rows_affected} row(s))")
+                    logger.debug(f"✓ Updated form={form_value} for URL: {sub_url} ({rows_affected} row(s))")
                     return True
                 else:
-                    logger.warning(f"⚠ No matching sub_url found to update: {sub_url}")
+                    logger.warning(f"⚠ No matching URL found to update: {sub_url}")
                     logger.warning(f"   Normalized to: {normalized_input}")
                     return False
             
@@ -387,22 +294,35 @@ class CompaniesDB:
             logger.error(f"✗ Unexpected error updating form column: {e}")
             return False
 
+    def get_base_url(self, company_id: int) -> Optional[str]:
+        """Get base URL for a specific company"""
+        try:
+            query = """
+                SELECT url
+                FROM urls
+                WHERE company_id = %s AND category = 'base'
+                LIMIT 1
+            """
+            
+            results = execute_query(query, (company_id,), fetch=True)
+            
+            if results and len(results) > 0:
+                return results[0][0]
+            return None
+            
+        except Error as e:
+            logger.error(f"✗ Error fetching base URL for company_id {company_id}: {e}")
+            return None
+
     def get_statistics(self) -> Dict:
-        """
-        Get database statistics
-        
-        Returns:
-            Dict with statistics
-        """
+        """Get database statistics"""
         try:
             stats = {}
             
             with get_cursor() as cursor:
-                # Total companies
                 cursor.execute("SELECT COUNT(*) FROM companies")
                 stats['total_companies'] = cursor.fetchone()[0]
                 
-                # By status
                 cursor.execute("""
                     SELECT status, COUNT(*) 
                     FROM companies 
@@ -411,13 +331,19 @@ class CompaniesDB:
                 for row in cursor.fetchall():
                     stats[row[0]] = row[1]
                 
-                # Sub URLs
-                cursor.execute("SELECT COUNT(*) FROM company_sub_urls")
-                stats['total_sub_urls'] = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM urls")
+                stats['total_urls'] = cursor.fetchone()[0]
                 
-                # Additional URLs
-                cursor.execute("SELECT COUNT(*) FROM company_additional_urls")
-                stats['total_additional_urls'] = cursor.fetchone()[0]
+                cursor.execute("""
+                    SELECT category, COUNT(*) 
+                    FROM urls 
+                    GROUP BY category
+                """)
+                for row in cursor.fetchall():
+                    stats[f'{row[0]}_urls'] = row[1]
+                
+                cursor.execute("SELECT COUNT(*) FROM urls WHERE form = 1")
+                stats['urls_with_forms'] = cursor.fetchone()[0]
             
             return stats
             
@@ -437,14 +363,17 @@ class CompaniesDB:
             logger.info(f"      └─ Found: {stats.get('found', 0)}")
             logger.info(f"      └─ Not found: {stats.get('not_found', 0)}")
             logger.info(f"      └─ Error: {stats.get('error', 0)}")
-            logger.info(f"  📊 Sub URLs: {stats.get('total_sub_urls', 0)}")
-            logger.info(f"  📊 Additional URLs: {stats.get('total_additional_urls', 0)}")
+            logger.info(f"  📊 Total URLs: {stats.get('total_urls', 0)}")
+            logger.info(f"      └─ Base URLs: {stats.get('base_urls', 0)}")
+            logger.info(f"      └─ Sub URLs: {stats.get('sub_urls', 0)}")
+            logger.info(f"      └─ Additional URLs: {stats.get('additional_urls', 0)}")
+            logger.info(f"  📊 URLs with forms: {stats.get('urls_with_forms', 0)}")
             
-            # Sample companies
             with get_cursor() as cursor:
                 cursor.execute("""
-                    SELECT company_id, company_name, base_url, status 
-                    FROM companies 
+                    SELECT c.company_id, c.company_name, u.url, c.status 
+                    FROM companies c
+                    LEFT JOIN urls u ON c.company_id = u.company_id AND u.category = 'base'
                     LIMIT 5
                 """)
                 
@@ -463,7 +392,7 @@ class CompaniesDB:
             return False
     
     def reset_database(self) -> bool:
-        """Drop all company tables (USE WITH CAUTION!)"""
+        """Drop all company tables"""
         try:
             logger.warning("\n⚠️  RESETTING DATABASE - ALL DATA WILL BE DELETED!")
             
@@ -475,7 +404,7 @@ class CompaniesDB:
             with get_cursor() as cursor:
                 cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
                 
-                tables = ['company_additional_urls', 'company_sub_urls', 'companies']
+                tables = ['urls', 'companies']
                 for table in tables:
                     cursor.execute(f"DROP TABLE IF EXISTS {table}")
                     logger.info(f"  ✓ Dropped table: {table}")
@@ -542,11 +471,9 @@ def main():
 
 
 if __name__ == "__main__":
-    # Setup logging for standalone execution
     import sys
     from pathlib import Path
     
-    # Get log directory
     CURRENT_FILE_DIR = Path(__file__).parent
     AUTOMATION_ROOT = CURRENT_FILE_DIR.parent.parent
     LOG_DIR = AUTOMATION_ROOT / 'logs'

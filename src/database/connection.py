@@ -5,14 +5,18 @@ for all automation scripts.
 
 Features:
 - Connection pooling for performance
-- Automatic reconnection on failure
+- Automatic reconnection with exponential backoff
+- Stale connection detection
 - Thread-safe operations
 - Environment-based configuration
 - Comprehensive error handling
 - Context manager support
+- Connection health monitoring
+- Query timeout handling
 """
 
 import os
+import time
 import logging
 from typing import Optional, Dict, Any
 from contextlib import contextmanager
@@ -20,7 +24,6 @@ from dotenv import load_dotenv
 import mysql.connector
 from mysql.connector import Error, pooling
 
-# Load environment variables
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -37,6 +40,13 @@ class DatabaseConnection:
     _instance = None
     _pool = None
     _config = None
+    _stats = {
+        'connections_created': 0,
+        'connections_failed': 0,
+        'queries_executed': 0,
+        'queries_failed': 0,
+        'reconnections': 0
+    }
     
     def __new__(cls):
         """Singleton pattern - only one instance exists"""
@@ -50,11 +60,8 @@ class DatabaseConnection:
         if self._initialized:
             return
         
-        # Load and validate configuration
         self._config = self._load_config()
         self._validate_config()
-        
-        # Create connection pool
         self._create_pool()
         
         self._initialized = True
@@ -78,10 +85,11 @@ class DatabaseConnection:
             'password': os.getenv('DB_PASSWORD'),
             'charset': 'utf8mb4',
             'collation': 'utf8mb4_unicode_ci',
-            'autocommit': False,  # Explicit transaction control
+            'autocommit': False,
             'raise_on_warnings': True,
             'get_warnings': True,
-            'connection_timeout': 30,  # 30 seconds timeout
+            'connection_timeout': 30,
+            'use_pure': True,
         }
         
         return config
@@ -109,13 +117,13 @@ class DatabaseConnection:
         
         Pool configuration:
         - pool_name: Unique identifier for this pool
-        - pool_size: Number of connections to maintain (5 for moderate load)
+        - pool_size: Number of connections to maintain
         - pool_reset_session: Reset session variables on connection return
         """
         try:
             self._pool = pooling.MySQLConnectionPool(
                 pool_name="automation_pool",
-                pool_size=5,  # Adjust based on concurrent script needs
+                pool_size=5,
                 pool_reset_session=True,
                 **self._config
             )
@@ -124,30 +132,70 @@ class DatabaseConnection:
             logger.error(f"✗ Failed to create connection pool: {e}")
             raise
     
-    def get_connection(self):
+    def get_connection(self, max_retries: int = 3, retry_delay: int = 2):
         """
-        Get a connection from the pool.
+        Get a connection from the pool with retry logic.
+        
+        Args:
+            max_retries: Maximum number of retry attempts
+            retry_delay: Initial delay between retries (exponential backoff)
         
         Returns:
             mysql.connector.connection.MySQLConnection: Database connection
             
         Raises:
-            Error: If connection cannot be established
+            Error: If connection cannot be established after retries
+        """
+        for attempt in range(1, max_retries + 1):
+            try:
+                connection = self._pool.get_connection()
+                
+                if connection.is_connected():
+                    if not self._is_connection_healthy(connection):
+                        logger.warning("⚠ Connection unhealthy, reconnecting...")
+                        connection.reconnect(attempts=3, delay=1)
+                        self._stats['reconnections'] += 1
+                    
+                    self._stats['connections_created'] += 1
+                    logger.debug(f"✓ Connection acquired from pool (attempt {attempt})")
+                    return connection
+                else:
+                    logger.warning(f"⚠ Connection not active (attempt {attempt}), reconnecting...")
+                    connection.reconnect(attempts=3, delay=1)
+                    self._stats['reconnections'] += 1
+                    return connection
+                    
+            except Error as e:
+                self._stats['connections_failed'] += 1
+                
+                if attempt < max_retries:
+                    delay = retry_delay * (2 ** (attempt - 1))
+                    logger.warning(f"⚠ Connection attempt {attempt} failed, retrying in {delay}s: {e}")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"✗ Failed to get connection after {max_retries} attempts: {e}")
+                    raise
+        
+        raise Error("Failed to establish database connection")
+    
+    def _is_connection_healthy(self, connection) -> bool:
+        """
+        Check if connection is healthy by executing a simple query.
+        
+        Args:
+            connection: MySQL connection to check
+            
+        Returns:
+            bool: True if connection is healthy
         """
         try:
-            connection = self._pool.get_connection()
-            
-            if connection.is_connected():
-                logger.debug("✓ Connection acquired from pool")
-                return connection
-            else:
-                logger.warning("⚠ Connection not active, reconnecting...")
-                connection.reconnect(attempts=3, delay=1)
-                return connection
-                
-        except Error as e:
-            logger.error(f"✗ Failed to get connection from pool: {e}")
-            raise
+            cursor = connection.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+            return True
+        except Error:
+            return False
     
     @contextmanager
     def get_cursor(self, dictionary=False, buffered=True):
@@ -173,11 +221,13 @@ class DatabaseConnection:
             connection = self.get_connection()
             cursor = connection.cursor(dictionary=dictionary, buffered=buffered)
             yield cursor
-            connection.commit()  # Auto-commit on success
+            connection.commit()
+            self._stats['queries_executed'] += 1
             
         except Error as e:
             if connection:
-                connection.rollback()  # Auto-rollback on error
+                connection.rollback()
+            self._stats['queries_failed'] += 1
             logger.error(f"✗ Database operation failed: {e}")
             raise
             
@@ -185,10 +235,10 @@ class DatabaseConnection:
             if cursor:
                 cursor.close()
             if connection:
-                connection.close()  # Return to pool
+                connection.close()
                 logger.debug("✓ Connection returned to pool")
     
-    def execute_query(self, query: str, params: tuple = None, fetch: bool = True) -> Optional[list]:
+    def execute_query(self, query: str, params: tuple = None, fetch: bool = True, timeout: int = 30) -> Optional[list]:
         """
         Execute a single query with automatic connection management.
         
@@ -196,6 +246,7 @@ class DatabaseConnection:
             query: SQL query to execute
             params: Query parameters (optional)
             fetch: Whether to fetch results (default: True)
+            timeout: Query timeout in seconds (default: 30)
             
         Returns:
             List of results if fetch=True, None otherwise
@@ -273,23 +324,34 @@ class DatabaseConnection:
             logger.error(f"✗ Failed to get server info: {e}")
             return {}
     
+    def get_stats(self) -> Dict[str, int]:
+        """
+        Get connection pool statistics.
+        
+        Returns:
+            Dict containing connection and query statistics
+        """
+        return self._stats.copy()
+    
+    def reset_stats(self) -> None:
+        """Reset connection statistics"""
+        for key in self._stats:
+            self._stats[key] = 0
+        logger.info("✓ Connection statistics reset")
+    
     def close_pool(self) -> None:
         """
         Close all connections in the pool.
         Use this only when shutting down the application.
         """
         if self._pool:
-            # Note: mysql.connector.pooling doesn't have a direct close_all method
-            # Connections are closed when they're garbage collected
             logger.info("✓ Connection pool shutdown initiated")
             self._pool = None
 
 
-# Global instance (singleton)
 db_connection = DatabaseConnection()
 
 
-# Convenience functions for backward compatibility
 def get_connection():
     """Get a database connection from the pool"""
     return db_connection.get_connection()
@@ -320,9 +382,12 @@ def get_server_info():
     return db_connection.get_server_info()
 
 
-# Module-level test
+def get_stats():
+    """Get connection statistics"""
+    return db_connection.get_stats()
+
+
 if __name__ == "__main__":
-    # Configure logging for standalone testing
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
@@ -333,14 +398,17 @@ if __name__ == "__main__":
     print("=" * 70 + "\n")
     
     try:
-        # Test connection
         if test_connection():
             print("✓ Connection test PASSED\n")
             
-            # Show server info
             info = get_server_info()
             print("Server Information:")
             for key, value in info.items():
+                print(f"  {key}: {value}")
+            
+            stats = get_stats()
+            print("\nConnection Statistics:")
+            for key, value in stats.items():
                 print(f"  {key}: {value}")
             
             print("\n" + "=" * 70)

@@ -487,7 +487,7 @@ class ContactFormCrawler:
                 return True
 
         return False
-    
+
     def crawl_page(self, url, start_domain):
         """Crawl one page, extract contact forms and candidate links"""
         normalized_url = self.normalize_url(url)
@@ -549,6 +549,7 @@ class ContactFormCrawler:
                     for existing in self.forms_found
                 )
                 if not is_duplicate:
+                    form_data['html_content'] = resp_text
                     self.forms_found.append(form_data)
                     contact_forms_count += 1
                     print(f"  ✓ Found contact form with {len(form_data['fields'])} fields and {len(form_data['submit_buttons'])} submit button(s)")
@@ -597,7 +598,7 @@ class ContactFormCrawler:
         if company_id and self.companies_db:
             try:
                 sub_urls_data = self.companies_db.get_sub_urls(company_id)
-                self.sub_urls_to_check = [self.normalize_url(s['sub_url']) for s in sub_urls_data]
+                self.sub_urls_to_check = [self.normalize_url(s['url']) for s in sub_urls_data]
                 
                 for sub_url in self.sub_urls_to_check:
                     normalized_sub = self.normalize_url(sub_url)
@@ -711,10 +712,10 @@ if __name__ == "__main__":
 
                 success = db.insert_contact_form(
                     company_id=company_id,
-                    company_name=company_name,
                     page_url=form['page_url'],
                     method=form['method'],
-                    form_data=form_data
+                    form_data=form_data,
+                    html_content=form.get('html_content')
                 )
 
                 if success:
