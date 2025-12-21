@@ -32,7 +32,9 @@ class ClickUpDB:
     def __init__(self):
         """Initialize ClickUp database manager"""
         logger.info("Initializing ClickUp database manager")
-    
+        self.create_tables()        
+        self.create_views_table() 
+
     def create_tables(self) -> bool:
         """
         Create all required tables for ClickUp integration
@@ -165,6 +167,52 @@ class ClickUpDB:
             logger.error(f"✗ Error creating tables: {e}")
             return False
     
+    def create_views_table(self):
+        """
+        Create clickup_views table if it doesn't exist
+        Automatically called during initialization
+        """
+        try:
+            with get_cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS clickup_views (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        view_id VARCHAR(50) NOT NULL UNIQUE,
+                        api_key_id INT NOT NULL,
+                        view_name VARCHAR(255) NOT NULL,
+                        view_type VARCHAR(50) NOT NULL,
+                        workspace_id VARCHAR(50),
+                        space_id VARCHAR(50),
+                        folder_id VARCHAR(50),
+                        list_id VARCHAR(50),
+                        filters JSON,
+                        `grouping` JSON,
+                        sorting JSON,
+                        `columns` JSON,
+                        settings JSON,
+                        creator_id VARCHAR(50),
+                        creator_username VARCHAR(255),
+                        is_private BOOLEAN DEFAULT FALSE,
+                        is_default BOOLEAN DEFAULT FALSE,
+                        date_created BIGINT,
+                        date_updated BIGINT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        FOREIGN KEY (api_key_id) REFERENCES clickup_api_keys(id) ON DELETE CASCADE,
+                        INDEX idx_view_id (view_id),
+                        INDEX idx_api_key (api_key_id),
+                        INDEX idx_workspace (workspace_id),
+                        INDEX idx_space (space_id),
+                        INDEX idx_list (list_id),
+                        INDEX idx_view_type (view_type)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """)
+                logger.info("✓ Views table ready")
+                return True
+        except Exception as e:
+            logger.error(f"✗ Error creating views table: {e}")
+            return False
+
     def drop_tables(self) -> bool:
         """
         Drop all ClickUp tables (use with caution!)
@@ -179,6 +227,7 @@ class ClickUpDB:
                 cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
                 cursor.execute("DROP TABLE IF EXISTS clickup_sync_log")
                 cursor.execute("DROP TABLE IF EXISTS clickup_tickets")
+                cursor.execute("DROP TABLE IF EXISTS clickup_views")
                 cursor.execute("DROP TABLE IF EXISTS clickup_api_keys")
                 cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
                 
