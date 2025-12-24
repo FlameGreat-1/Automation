@@ -162,11 +162,11 @@ sudo nano /etc/ssmtp/ssmtp.conf
 
 root=softverse.com@gmail.com
 mailhub=smtp.gmail.com:587
-AuthUser=softverse.com@gmail.com  **______Change email to yours______**
+AuthUser=hassansalahuddin298@gmail.com 
 AuthPass=your_app_password_here
 UseSTARTTLS=YES
 FromLineOverride=YES
-
+hostname=automation-server
 
 # Get Gmail App Password:
 

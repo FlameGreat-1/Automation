@@ -1,6 +1,6 @@
 #!/bin/bash
 
-AUTOMATION_ROOT="/mnt/c/Users/HomePc/Automation"
+AUTOMATION_ROOT="/c/Users/HomePc/Automation"
 ENV_FILE="$AUTOMATION_ROOT/.env"
 VENV_PATH="$AUTOMATION_ROOT/venv"
 PYTHON_SCRIPT="$AUTOMATION_ROOT/src/clickup/Ticket_Fetcher.py"

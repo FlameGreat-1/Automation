@@ -23,17 +23,18 @@ class ClickUpDB:
     """
     ClickUp Database Manager
     
-    Manages three main tables:
+    Manages four main tables:
     1. clickup_api_keys - Store multiple ClickUp API tokens
     2. clickup_tickets - Store parsed ticket/task data
-    3. clickup_sync_log - Track synchronization history
+    3. clickup_custom_fields - Store normalized custom field data
+    4. clickup_sync_log - Track synchronization history
     """
     
     def __init__(self):
         """Initialize ClickUp database manager"""
         logger.info("Initializing ClickUp database manager")
-        self.create_tables()        
-        self.create_views_table() 
+        self.create_tables()    
+        self.create_custom_fields_table()  
 
     def create_tables(self) -> bool:
         """
@@ -48,170 +49,272 @@ class ClickUpDB:
                 # ============================================================
                 # TABLE 1: clickup_api_keys
                 # ============================================================
-                logger.info("Creating clickup_api_keys table...")
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS clickup_api_keys (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        api_key VARCHAR(255) NOT NULL UNIQUE,
-                        key_name VARCHAR(100) NOT NULL,
-                        workspace_id VARCHAR(50),
-                        workspace_name VARCHAR(255),
-                        is_active BOOLEAN DEFAULT TRUE,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        last_used_at TIMESTAMP NULL,
-                        last_sync_at TIMESTAMP NULL,
-                        total_syncs INT DEFAULT 0,
-                        notes TEXT,
-                        INDEX idx_active (is_active),
-                        INDEX idx_workspace (workspace_id)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-                """)
-                logger.info("✓ clickup_api_keys table created")
+                try:
+                    logger.info("Creating clickup_api_keys table...")
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS clickup_api_keys (
+                            id INT AUTO_INCREMENT PRIMARY KEY,
+                            api_key VARCHAR(255) NOT NULL UNIQUE,
+                            key_name VARCHAR(100) NOT NULL,
+                            workspace_id VARCHAR(50),
+                            workspace_name VARCHAR(255),
+                            is_active BOOLEAN DEFAULT TRUE,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            last_used_at TIMESTAMP NULL,
+                            last_sync_at TIMESTAMP NULL,
+                            total_syncs INT DEFAULT 0,
+                            notes TEXT,
+                            INDEX idx_active (is_active),
+                            INDEX idx_workspace (workspace_id)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """)
+                    logger.info("✓ clickup_api_keys table created")
+                except Exception as e:
+                    if "1050" in str(e):  # Table already exists
+                        logger.info("✓ clickup_api_keys table already exists")
+                    else:
+                        raise
                 
                 # ============================================================
                 # TABLE 2: clickup_tickets
                 # ============================================================
-                logger.info("Creating clickup_tickets table...")
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS clickup_tickets (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        api_key_id INT NOT NULL,
-                        
-                        -- ClickUp IDs
-                        ticket_id VARCHAR(50) NOT NULL UNIQUE,
-                        workspace_id VARCHAR(50),
-                        space_id VARCHAR(50),
-                        list_id VARCHAR(50),
-                        
-                        -- ClickUp Names
-                        workspace_name VARCHAR(255),
-                        space_name VARCHAR(255),
-                        list_name VARCHAR(255),
-                        
-                        -- Ticket Core Data
-                        name VARCHAR(500) NOT NULL,
-                        description TEXT,
-                        status VARCHAR(100),
-                        priority VARCHAR(50),
-                        
-                        -- Dates
-                        due_date BIGINT,
-                        start_date BIGINT,
-                        date_created BIGINT,
-                        date_updated BIGINT,
-                        date_closed BIGINT,
-                        
-                        -- Assignment
-                        assignees JSON,
-                        creator_id VARCHAR(50),
-                        creator_username VARCHAR(100),
-                        
-                        -- Organization
-                        tags JSON,
-                        custom_fields JSON,
-                        
-                        -- URLs
-                        url VARCHAR(500),
-                        
-                        -- Metadata
-                        archived BOOLEAN DEFAULT FALSE,
-                        time_estimate BIGINT,
-                        time_spent BIGINT,
-                        
-                        -- Tracking
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                        
-                        FOREIGN KEY (api_key_id) REFERENCES clickup_api_keys(id) ON DELETE CASCADE,
-                        INDEX idx_ticket_id (ticket_id),
-                        INDEX idx_workspace (workspace_id),
-                        INDEX idx_space (space_id),
-                        INDEX idx_list (list_id),
-                        INDEX idx_status (status),
-                        INDEX idx_priority (priority),
-                        INDEX idx_archived (archived),
-                        INDEX idx_date_created (date_created),
-                        INDEX idx_date_updated (date_updated)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-                """)
-                logger.info("✓ clickup_tickets table created")
+                try:
+                    logger.info("Creating clickup_tickets table...")
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS clickup_tickets (
+                            id INT AUTO_INCREMENT PRIMARY KEY,
+                            api_key_id INT NOT NULL,
+                            
+                            -- ClickUp IDs
+                            ticket_id VARCHAR(50) NOT NULL UNIQUE,
+                            workspace_id VARCHAR(50),
+                            space_id VARCHAR(50),
+                            list_id VARCHAR(50),
+                            
+                            -- ClickUp Names
+                            workspace_name VARCHAR(255),
+                            space_name VARCHAR(255),
+                            list_name VARCHAR(255),
+                            
+                            -- Ticket Core Data
+                            name VARCHAR(500) NOT NULL,
+                            description TEXT,
+                            status VARCHAR(100),
+                            priority VARCHAR(50),
+                            
+                            -- Dates
+                            due_date BIGINT,
+                            start_date BIGINT,
+                            date_created BIGINT,
+                            date_updated BIGINT,
+                            date_closed BIGINT,
+                            
+                            -- Assignment
+                            assignees JSON,
+                            creator_id VARCHAR(50),
+                            creator_username VARCHAR(100),
+                            
+                            -- Organization
+                            tags JSON,
+                            custom_fields JSON,
+                            custom_fields_raw JSON,  
+                            
+                            -- URLs
+                            url VARCHAR(500),
+                            
+                            -- Metadata
+                            archived BOOLEAN DEFAULT FALSE,
+                            time_estimate BIGINT,
+                            time_spent BIGINT,
+                            
+                            -- Tracking
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                            
+                            FOREIGN KEY (api_key_id) REFERENCES clickup_api_keys(id) ON DELETE CASCADE,
+                            INDEX idx_ticket_id (ticket_id),
+                            INDEX idx_workspace (workspace_id),
+                            INDEX idx_space (space_id),
+                            INDEX idx_list (list_id),
+                            INDEX idx_status (status),
+                            INDEX idx_priority (priority),
+                            INDEX idx_archived (archived),
+                            INDEX idx_date_created (date_created),
+                            INDEX idx_date_updated (date_updated)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """)
+                    logger.info("✓ clickup_tickets table created")
+                except Exception as e:
+                    if "1050" in str(e):  # Table already exists
+                        logger.info("✓ clickup_tickets table already exists")
+                    else:
+                        raise
                 
                 # ============================================================
                 # TABLE 3: clickup_sync_log
                 # ============================================================
-                logger.info("Creating clickup_sync_log table...")
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS clickup_sync_log (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        api_key_id INT NOT NULL,
-                        sync_started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        sync_completed_at TIMESTAMP NULL,
-                        status ENUM('running', 'completed', 'failed') DEFAULT 'running',
-                        tickets_fetched INT DEFAULT 0,
-                        tickets_new INT DEFAULT 0,
-                        tickets_updated INT DEFAULT 0,
-                        error_message TEXT,
-                        
-                        FOREIGN KEY (api_key_id) REFERENCES clickup_api_keys(id) ON DELETE CASCADE,
-                        INDEX idx_api_key (api_key_id),
-                        INDEX idx_status (status),
-                        INDEX idx_sync_date (sync_started_at)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-                """)
-                logger.info("✓ clickup_sync_log table created")
+                try:
+                    logger.info("Creating clickup_sync_log table...")
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS clickup_sync_log (
+                            id INT AUTO_INCREMENT PRIMARY KEY,
+                            api_key_id INT NOT NULL,
+                            sync_started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            sync_completed_at TIMESTAMP NULL,
+                            status ENUM('running', 'completed', 'failed') DEFAULT 'running',
+                            tickets_fetched INT DEFAULT 0,
+                            tickets_new INT DEFAULT 0,
+                            tickets_updated INT DEFAULT 0,
+                            error_message TEXT,
+                            
+                            FOREIGN KEY (api_key_id) REFERENCES clickup_api_keys(id) ON DELETE CASCADE,
+                            INDEX idx_api_key (api_key_id),
+                            INDEX idx_status (status),
+                            INDEX idx_sync_date (sync_started_at)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """)
+                    logger.info("✓ clickup_sync_log table created")
+                except Exception as e:
+                    if "1050" in str(e):  # Table already exists
+                        logger.info("✓ clickup_sync_log table already exists")
+                    else:
+                        raise
                 
-                logger.info("✓ All ClickUp tables created successfully")
+                logger.info("✓ All ClickUp tables ready")
                 return True
                 
         except Exception as e:
             logger.error(f"✗ Error creating tables: {e}")
             return False
     
-    def create_views_table(self):
+    
+    def create_custom_fields_table(self) -> bool:
         """
-        Create clickup_views table if it doesn't exist
-        Automatically called during initialization
+        Create clickup_custom_fields table for normalized custom field storage
+        
+        Returns:
+            True if successful, False otherwise
         """
         try:
             with get_cursor() as cursor:
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS clickup_views (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        view_id VARCHAR(50) NOT NULL UNIQUE,
-                        api_key_id INT NOT NULL,
-                        view_name VARCHAR(255) NOT NULL,
-                        view_type VARCHAR(50) NOT NULL,
-                        workspace_id VARCHAR(50),
-                        space_id VARCHAR(50),
-                        folder_id VARCHAR(50),
-                        list_id VARCHAR(50),
-                        filters JSON,
-                        `grouping` JSON,
-                        sorting JSON,
-                        `columns` JSON,
-                        settings JSON,
-                        creator_id VARCHAR(50),
-                        creator_username VARCHAR(255),
-                        is_private BOOLEAN DEFAULT FALSE,
-                        is_default BOOLEAN DEFAULT FALSE,
-                        date_created BIGINT,
-                        date_updated BIGINT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                        FOREIGN KEY (api_key_id) REFERENCES clickup_api_keys(id) ON DELETE CASCADE,
-                        INDEX idx_view_id (view_id),
-                        INDEX idx_api_key (api_key_id),
-                        INDEX idx_workspace (workspace_id),
-                        INDEX idx_space (space_id),
-                        INDEX idx_list (list_id),
-                        INDEX idx_view_type (view_type)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-                """)
-                logger.info("✓ Views table ready")
+                try:
+                    logger.info("Creating clickup_custom_fields table...")
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS clickup_custom_fields (
+                            id INT AUTO_INCREMENT PRIMARY KEY,
+                            ticket_id VARCHAR(50) NOT NULL,
+                            
+                            -- Common fields (present in all custom field types)
+                            field_id VARCHAR(50) NOT NULL,
+                            field_name VARCHAR(255) NOT NULL,
+                            field_type VARCHAR(50) NOT NULL,
+                            field_value JSON,
+                            value_richtext TEXT,
+                            type_config JSON,
+                            date_created BIGINT,
+                            hide_from_guests BOOLEAN DEFAULT FALSE,
+                            is_required BOOLEAN DEFAULT FALSE,
+                            
+                            -- Type-specific fields (future-proof)
+                            extra_fields JSON,
+                            
+                            -- Tracking
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                            
+                            FOREIGN KEY (ticket_id) REFERENCES clickup_tickets(ticket_id) ON DELETE CASCADE,
+                            INDEX idx_ticket (ticket_id),
+                            INDEX idx_field_id (field_id),
+                            INDEX idx_field_type (field_type),
+                            INDEX idx_field_name (field_name)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """)
+                    logger.info("✓ clickup_custom_fields table created")
+                except Exception as e:
+                    if "1050" in str(e):  # Table already exists
+                        logger.info("✓ clickup_custom_fields table already exists")
+                    else:
+                        raise
+                
                 return True
+                
         except Exception as e:
-            logger.error(f"✗ Error creating views table: {e}")
+            logger.error(f"✗ Error creating custom fields table: {e}")
             return False
+    
+    def insert_custom_fields(
+        self,
+        ticket_id: str,
+        custom_fields: list
+    ) -> bool:
+        """
+        Insert or update custom fields for a ticket
+        
+        Args:
+            ticket_id: ClickUp ticket ID
+            custom_fields: List of custom field objects from ClickUp API
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            with get_cursor() as cursor:
+                # Delete existing custom fields for this ticket
+                cursor.execute("""
+                    DELETE FROM clickup_custom_fields 
+                    WHERE ticket_id = %s
+                """, (ticket_id,))
+                
+                # Insert each custom field
+                for field in custom_fields:
+                    field_id = field.get('id')
+                    field_name = field.get('name')
+                    field_type = field.get('type')
+                    field_value = json.dumps(field.get('value')) if field.get('value') is not None else None
+                    value_richtext = field.get('value_richtext', '')
+                    type_config = json.dumps(field.get('type_config', {}))
+                    date_created = field.get('date_created')
+                    hide_from_guests = field.get('hide_from_guests', False)
+                    is_required = field.get('required', False)
+                    
+                    # Extra fields (currently empty, future-proof)
+                    extra_fields = json.dumps({})
+                    
+                    cursor.execute("""
+                        INSERT INTO clickup_custom_fields (
+                            ticket_id,
+                            field_id,
+                            field_name,
+                            field_type,
+                            field_value,
+                            value_richtext,
+                            type_config,
+                            date_created,
+                            hide_from_guests,
+                            is_required,
+                            extra_fields
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        ticket_id,
+                        field_id,
+                        field_name,
+                        field_type,
+                        field_value,
+                        value_richtext,
+                        type_config,
+                        date_created,
+                        hide_from_guests,
+                        is_required,
+                        extra_fields
+                    ))
+                
+                logger.debug(f"✓ Inserted {len(custom_fields)} custom field(s) for ticket {ticket_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"✗ Error inserting custom fields: {e}")
+            return False
+
 
     def drop_tables(self) -> bool:
         """
@@ -225,9 +328,9 @@ class ClickUpDB:
                 logger.warning("Dropping ClickUp tables...")
                 
                 cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+                cursor.execute("DROP TABLE IF EXISTS clickup_custom_fields")
                 cursor.execute("DROP TABLE IF EXISTS clickup_sync_log")
                 cursor.execute("DROP TABLE IF EXISTS clickup_tickets")
-                cursor.execute("DROP TABLE IF EXISTS clickup_views")
                 cursor.execute("DROP TABLE IF EXISTS clickup_api_keys")
                 cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
                 
@@ -364,6 +467,7 @@ class ClickUpDB:
     ) -> Optional[int]:
         """
         Insert a new ticket or update if exists
+        Stores ticket data in clickup_tickets and custom fields in clickup_custom_fields
         
         Args:
             api_key_id: API key ID
@@ -406,8 +510,9 @@ class ClickUpDB:
             # Tags
             tags = json.dumps(ticket_data.get('tags', []))
             
-            # Custom fields
-            custom_fields = json.dumps(ticket_data.get('custom_fields', []))
+            # Custom fields 
+            custom_fields_list = ticket_data.get('custom_fields', [])
+            custom_fields = json.dumps(custom_fields_list)
             
             # URL
             url = ticket_data.get('url')
@@ -416,6 +521,9 @@ class ClickUpDB:
             archived = ticket_data.get('archived', False)
             time_estimate = ticket_data.get('time_estimate')
             time_spent = ticket_data.get('time_spent')
+            
+            # Variable to store result ID
+            result_id = None
             
             with get_cursor() as cursor:
                 # Check if ticket exists
@@ -465,8 +573,8 @@ class ClickUpDB:
                         time_estimate, time_spent, ticket_id
                     ))
                     
+                    result_id = existing[0]
                     logger.debug(f"✓ Updated ticket: {name}")
-                    return existing[0]
                 else:
                     # Insert new ticket
                     cursor.execute("""
@@ -477,12 +585,12 @@ class ClickUpDB:
                             name, description, status, priority,
                             due_date, start_date, date_created, date_updated, date_closed,
                             assignees, creator_id, creator_username,
-                            tags, custom_fields, url, archived,
+                            tags, custom_fields, custom_fields_raw, url, archived,
                             time_estimate, time_spent
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s
                         )
                     """, (
                         api_key_id, ticket_id,
@@ -491,12 +599,17 @@ class ClickUpDB:
                         name, description, status, priority,
                         due_date, start_date, date_created, date_updated, date_closed,
                         assignees, creator_id, creator_username,
-                        tags, custom_fields, url, archived,
+                        tags, custom_fields, custom_fields_raw, url, archived,
                         time_estimate, time_spent
                     ))
                     
+                    result_id = cursor.lastrowid
                     logger.debug(f"✓ Inserted ticket: {name}")
-                    return cursor.lastrowid
+            
+            if custom_fields_list:
+                self.insert_custom_fields(ticket_id, custom_fields_list)
+            
+            return result_id
                     
         except Exception as e:
             logger.error(f"✗ Error inserting ticket: {e}")
@@ -714,7 +827,7 @@ class ClickUpDB:
         """
         try:
             with get_cursor() as cursor:
-                tables = ['clickup_api_keys', 'clickup_tickets', 'clickup_sync_log']
+                tables = ['clickup_api_keys', 'clickup_tickets', 'clickup_custom_fields', 'clickup_sync_log']
                 
                 for table in tables:
                     cursor.execute(f"SHOW TABLES LIKE '{table}'")
