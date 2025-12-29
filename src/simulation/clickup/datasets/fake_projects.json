@@ -1,0 +1,282 @@
+[
+  {
+    "space_id": "iw5lwzsci",
+    "space_name": "Platform Team",
+    "list_id": "wo09qpcpq",
+    "list_name": "Platform",
+    "description": "Core platform development and infrastructure",
+    "common_tasks": [
+      "API development",
+      "Database optimization",
+      "Infrastructure scaling",
+      "Security hardening"
+    ],
+    "created_date": 1751715367662
+  },
+  {
+    "space_id": "x5dn2j7bu",
+    "space_name": "Mobile App Team",
+    "list_id": "oezpw46sc",
+    "list_name": "Mobile App",
+    "description": "iOS and Android mobile application",
+    "common_tasks": [
+      "Feature development",
+      "Bug fixes",
+      "Performance optimization",
+      "UI improvements"
+    ],
+    "created_date": 1756035367662
+  },
+  {
+    "space_id": "njjn4aitw",
+    "space_name": "Web Dashboard Team",
+    "list_id": "hmo1kk9fr",
+    "list_name": "Web Dashboard",
+    "description": "Customer-facing web dashboard",
+    "common_tasks": [
+      "Dashboard features",
+      "Analytics integration",
+      "UI/UX improvements",
+      "Responsive design"
+    ],
+    "created_date": 1752752167662
+  },
+  {
+    "space_id": "wni9wtvr2",
+    "space_name": "Integration Team",
+    "list_id": "4bns12zm0",
+    "list_name": "Integration",
+    "description": "Third-party integrations and APIs",
+    "common_tasks": [
+      "API integration",
+      "Webhook setup",
+      "Data sync",
+      "Authentication"
+    ],
+    "created_date": 1757244967662
+  },
+  {
+    "space_id": "d1drswr0g",
+    "space_name": "Internal Tools Team",
+    "list_id": "m4g9pj5ow",
+    "list_name": "Internal Tools",
+    "description": "Internal tooling and automation",
+    "common_tasks": [
+      "Admin tools",
+      "Automation scripts",
+      "Reporting tools",
+      "Developer tools"
+    ],
+    "created_date": 1755344167662
+  },
+  {
+    "space_id": "95wcxctwk",
+    "space_name": "Platform Team",
+    "list_id": "7okjx6ve1",
+    "list_name": "Platform v2",
+    "description": "Core platform development and infrastructure",
+    "common_tasks": [
+      "API development",
+      "Database optimization",
+      "Infrastructure scaling",
+      "Security hardening"
+    ],
+    "created_date": 1756553767663
+  },
+  {
+    "space_id": "nkzjtfgzj",
+    "space_name": "Mobile App Team",
+    "list_id": "w5uc50meb",
+    "list_name": "Mobile App v2",
+    "description": "iOS and Android mobile application",
+    "common_tasks": [
+      "Feature development",
+      "Bug fixes",
+      "Performance optimization",
+      "UI improvements"
+    ],
+    "created_date": 1758195367663
+  },
+  {
+    "space_id": "a3kgo072y",
+    "space_name": "Web Dashboard Team",
+    "list_id": "dohpcle84",
+    "list_name": "Web Dashboard v2",
+    "description": "Customer-facing web dashboard",
+    "common_tasks": [
+      "Dashboard features",
+      "Analytics integration",
+      "UI/UX improvements",
+      "Responsive design"
+    ],
+    "created_date": 1755171367663
+  },
+  {
+    "space_id": "i5pebh110",
+    "space_name": "Integration Team",
+    "list_id": "zumuz4vjv",
+    "list_name": "Integration v2",
+    "description": "Third-party integrations and APIs",
+    "common_tasks": [
+      "API integration",
+      "Webhook setup",
+      "Data sync",
+      "Authentication"
+    ],
+    "created_date": 1758454567663
+  },
+  {
+    "space_id": "ixs8r2qgb",
+    "space_name": "Internal Tools Team",
+    "list_id": "47pfe68ur",
+    "list_name": "Internal Tools v2",
+    "description": "Internal tooling and automation",
+    "common_tasks": [
+      "Admin tools",
+      "Automation scripts",
+      "Reporting tools",
+      "Developer tools"
+    ],
+    "created_date": 1758886567663
+  },
+  {
+    "space_id": "zeg3wfarc",
+    "space_name": "Platform Team",
+    "list_id": "6bz6rq53h",
+    "list_name": "Platform v3",
+    "description": "Core platform development and infrastructure",
+    "common_tasks": [
+      "API development",
+      "Database optimization",
+      "Infrastructure scaling",
+      "Security hardening"
+    ],
+    "created_date": 1758195367663
+  },
+  {
+    "space_id": "7qnxy70cm",
+    "space_name": "Mobile App Team",
+    "list_id": "5y6iyqrei",
+    "list_name": "Mobile App v3",
+    "description": "iOS and Android mobile application",
+    "common_tasks": [
+      "Feature development",
+      "Bug fixes",
+      "Performance optimization",
+      "UI improvements"
+    ],
+    "created_date": 1758022567663
+  },
+  {
+    "space_id": "bcc501y9p",
+    "space_name": "Web Dashboard Team",
+    "list_id": "1mjx01yex",
+    "list_name": "Web Dashboard v3",
+    "description": "Customer-facing web dashboard",
+    "common_tasks": [
+      "Dashboard features",
+      "Analytics integration",
+      "UI/UX improvements",
+      "Responsive design"
+    ],
+    "created_date": 1752492967663
+  },
+  {
+    "space_id": "lppxh3lzl",
+    "space_name": "Integration Team",
+    "list_id": "40oer6guj",
+    "list_name": "Integration v3",
+    "description": "Third-party integrations and APIs",
+    "common_tasks": [
+      "API integration",
+      "Webhook setup",
+      "Data sync",
+      "Authentication"
+    ],
+    "created_date": 1752752167663
+  },
+  {
+    "space_id": "s3rt0kdha",
+    "space_name": "Internal Tools Team",
+    "list_id": "kvd1sfihp",
+    "list_name": "Internal Tools v3",
+    "description": "Internal tooling and automation",
+    "common_tasks": [
+      "Admin tools",
+      "Automation scripts",
+      "Reporting tools",
+      "Developer tools"
+    ],
+    "created_date": 1757331367663
+  },
+  {
+    "space_id": "2rpc5c4g6",
+    "space_name": "Platform Team",
+    "list_id": "f4l71l5ay",
+    "list_name": "Platform v4",
+    "description": "Core platform development and infrastructure",
+    "common_tasks": [
+      "API development",
+      "Database optimization",
+      "Infrastructure scaling",
+      "Security hardening"
+    ],
+    "created_date": 1753356967663
+  },
+  {
+    "space_id": "0cuxxa47m",
+    "space_name": "Mobile App Team",
+    "list_id": "lupoolefy",
+    "list_name": "Mobile App v4",
+    "description": "iOS and Android mobile application",
+    "common_tasks": [
+      "Feature development",
+      "Bug fixes",
+      "Performance optimization",
+      "UI improvements"
+    ],
+    "created_date": 1758713767663
+  },
+  {
+    "space_id": "fagtpyy3q",
+    "space_name": "Web Dashboard Team",
+    "list_id": "na09ivjzt",
+    "list_name": "Web Dashboard v4",
+    "description": "Customer-facing web dashboard",
+    "common_tasks": [
+      "Dashboard features",
+      "Analytics integration",
+      "UI/UX improvements",
+      "Responsive design"
+    ],
+    "created_date": 1752665767663
+  },
+  {
+    "space_id": "12erdnkwz",
+    "space_name": "Integration Team",
+    "list_id": "fyjwdv5xu",
+    "list_name": "Integration v4",
+    "description": "Third-party integrations and APIs",
+    "common_tasks": [
+      "API integration",
+      "Webhook setup",
+      "Data sync",
+      "Authentication"
+    ],
+    "created_date": 1755603367663
+  },
+  {
+    "space_id": "blvpv7y8t",
+    "space_name": "Internal Tools Team",
+    "list_id": "kncyzc1o3",
+    "list_name": "Internal Tools v4",
+    "description": "Internal tooling and automation",
+    "common_tasks": [
+      "Admin tools",
+      "Automation scripts",
+      "Reporting tools",
+      "Developer tools"
+    ],
+    "created_date": 1753443367663
+  }
+]
