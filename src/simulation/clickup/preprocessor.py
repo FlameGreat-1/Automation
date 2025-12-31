@@ -1,5 +1,5 @@
 """
-Enterprise-Grade Ticket Data Preprocessor
+Ticket Data Preprocessor
 Analyzes ticket data to extract topics, patterns, and insights for LLM
 """
 
@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 
 from config import (
-    FAKE_PROJECTS_FILE, FAKE_USERS_FILE, FAKE_TICKETS_FILE
+    FAKE_PROJECTS_FILE, FAKE_USERS_FILE, FAKE_TICKETS_FILE, DATASETS_DIR
 )
 
 
@@ -24,7 +24,7 @@ class TicketPreprocessor:
         self.tickets = []
         self.now = datetime.now()
         
-    def load_data(self) -> bool:
+    def load_data(self) -> tuple:
         """Load generated data from JSON files"""
         try:
             with open(FAKE_PROJECTS_FILE, 'r', encoding='utf-8') as f:
@@ -36,11 +36,9 @@ class TicketPreprocessor:
             with open(FAKE_TICKETS_FILE, 'r', encoding='utf-8') as f:
                 self.tickets = json.load(f)
             
-            print(f"✓ Loaded {len(self.projects)} projects, {len(self.users)} users, {len(self.tickets)} tickets")
-            return True
+            return True, f"Loaded {len(self.projects)} projects, {len(self.users)} users, {len(self.tickets)} tickets"
         except Exception as e:
-            print(f"✗ Error loading data: {e}")
-            return False
+            return False, f"Error loading data: {e}"
     
     def extract_keywords(self, text: str) -> List[str]:
         """Extract meaningful keywords from text"""
@@ -61,15 +59,12 @@ class TicketPreprocessor:
         }
         
         words = re.findall(r'\b[a-z]{3,}\b', text)
-        
         keywords = [w for w in words if w not in stop_words]
         
         return keywords
     
     def extract_topics(self) -> Dict[str, Any]:
         """Extract topics and themes from tickets"""
-        print("\n[1/5] Extracting topics from tickets...")
-        
         all_keywords = []
         ticket_keywords = {}
         
@@ -118,8 +113,6 @@ class TicketPreprocessor:
                 if keyword in technical_terms:
                     type_topics[ticket_type][keyword] += 1
         
-        print(f"✓ Identified {len(topic_clusters)} major topics")
-        
         return {
             'top_keywords': top_keywords[:20],
             'topic_clusters': topic_clusters,
@@ -129,8 +122,6 @@ class TicketPreprocessor:
     
     def categorize_tickets(self) -> Dict[str, List[str]]:
         """Categorize tickets by functional area"""
-        print("\n[2/5] Categorizing tickets by functional area...")
-        
         categories = {
             'Authentication & Security': ['login', 'authentication', 'password', 'security', 'auth', 'sso', '2fa', 'token'],
             'Payment & Billing': ['payment', 'billing', 'invoice', 'subscription', 'checkout', 'transaction'],
@@ -162,8 +153,6 @@ class TicketPreprocessor:
             if not matched:
                 uncategorized.append(ticket['id'])
         
-        print(f"✓ Categorized {len(self.tickets) - len(uncategorized)} tickets into {len(categorized)} categories")
-        
         return {
             'categories': dict(categorized),
             'uncategorized': uncategorized,
@@ -172,8 +161,6 @@ class TicketPreprocessor:
 
     def analyze_patterns(self) -> Dict[str, Any]:
         """Identify critical patterns in ticket data"""
-        print("\n[3/5] Analyzing ticket patterns...")
-        
         now_ms = int(self.now.timestamp() * 1000)
         
         overdue_tickets = []
@@ -228,8 +215,6 @@ class TicketPreprocessor:
         overdue_tickets.sort(key=lambda x: x['days_overdue'], reverse=True)
         stale_tickets.sort(key=lambda x: x['days_stale'], reverse=True)
         
-        print(f"✓ Found {len(overdue_tickets)} overdue, {len(blocked_tickets)} blocked, {len(stale_tickets)} stale tickets")
-        
         return {
             'overdue_tickets': overdue_tickets,
             'blocked_tickets': blocked_tickets,
@@ -242,8 +227,6 @@ class TicketPreprocessor:
     
     def analyze_team_workload(self) -> Dict[str, Any]:
         """Analyze workload distribution across team members"""
-        print("\n[4/5] Analyzing team workload...")
-        
         user_workload = defaultdict(lambda: {
             'total': 0,
             'by_status': defaultdict(int),
@@ -296,11 +279,8 @@ class TicketPreprocessor:
         workload_list.sort(key=lambda x: x['total_tickets'], reverse=True)
         
         avg_workload = sum(w['total_tickets'] for w in workload_list) / len(workload_list) if workload_list else 0
-        
         overloaded = [w for w in workload_list if w['total_tickets'] > avg_workload * 1.5]
         underutilized = [w for w in workload_list if w['total_tickets'] < avg_workload * 0.5]
-        
-        print(f"✓ Analyzed workload for {len(workload_list)} team members")
         
         return {
             'workload_by_user': workload_list,
@@ -314,7 +294,6 @@ class TicketPreprocessor:
     
     def detect_anomalies(self) -> Dict[str, Any]:
         """Detect unusual patterns and anomalies"""
-        
         anomalies = []
         
         project_ticket_count = defaultdict(int)
@@ -392,8 +371,6 @@ class TicketPreprocessor:
     
     def generate_statistics(self) -> Dict[str, Any]:
         """Generate comprehensive statistics"""
-        print("\n[5/5] Generating statistics...")
-        
         total_tickets = len(self.tickets)
         
         status_dist = Counter(t['status']['status'] for t in self.tickets)
@@ -424,8 +401,6 @@ class TicketPreprocessor:
             if ticket['assignees']:
                 assignee_dist[ticket['assignees'][0]['username']] += 1
         
-        print(f"✓ Generated comprehensive statistics")
-        
         return {
             'total_tickets': total_tickets,
             'status_distribution': dict(status_dist),
@@ -438,10 +413,10 @@ class TicketPreprocessor:
             'completion_rate': round((status_dist['done'] / total_tickets) * 100, 1) if total_tickets > 0 else 0,
             'blocked_rate': round((status_dist.get('blocked', 0) / total_tickets) * 100, 1) if total_tickets > 0 else 0
         }
+
     
     def generate_insights_summary(self, analysis_results: Dict[str, Any]) -> str:
         """Generate human-readable insights summary"""
-        
         topics = analysis_results['topics']
         categories = analysis_results['categories']
         patterns = analysis_results['patterns']
@@ -515,15 +490,33 @@ class TicketPreprocessor:
         print("TICKET DATA PREPROCESSING & ANALYSIS")
         print("="*70)
         
-        if not self.load_data():
+        success, message = self.load_data()
+        if not success:
+            print(f"\n✗ {message}")
             return {}
+        print(f"\n✓ {message}")
         
+        print("\n[1/5] Extracting topics from tickets...")
         topics = self.extract_topics()
+        print(f"✓ Identified {len(topics['topic_clusters'])} major topics")
+        
+        print("\n[2/5] Categorizing tickets by functional area...")
         categories = self.categorize_tickets()
+        print(f"✓ Categorized {len(self.tickets) - len(categories['uncategorized'])} tickets into {len(categories['categories'])} categories")
+        
+        print("\n[3/5] Analyzing ticket patterns...")
         patterns = self.analyze_patterns()
+        print(f"✓ Found {len(patterns['overdue_tickets'])} overdue, {len(patterns['blocked_tickets'])} blocked, {len(patterns['stale_tickets'])} stale tickets")
+        
+        print("\n[4/5] Analyzing team workload...")
         workload = self.analyze_team_workload()
-        anomalies = self.detect_anomalies()
+        print(f"✓ Analyzed workload for {workload['total_active_users']} team members")
+        
+        print("\n[5/5] Generating statistics...")
         statistics = self.generate_statistics()
+        print(f"✓ Generated comprehensive statistics")
+        
+        anomalies = self.detect_anomalies()
         
         analysis_results = {
             'topics': topics,
@@ -543,7 +536,7 @@ class TicketPreprocessor:
         summary = self.generate_insights_summary(analysis_results)
         print(f"\n{summary}")
         
-        output_file = Path(__file__).parent / "datasets" / "analysis_results.json"
+        output_file = DATASETS_DIR / "analysis_results.json"
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(analysis_results, f, indent=2, ensure_ascii=False)
         

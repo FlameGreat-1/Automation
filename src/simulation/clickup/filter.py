@@ -2,7 +2,7 @@ class TicketFilter:
     """Filters ticket data for LLM context generation"""
     
 """
-Enterprise-Grade Ticket Filtering System
+Ticket Filtering System
 Filters tickets by various criteria for LLM context generation
 """
 
@@ -484,22 +484,6 @@ class TicketFilter:
         
         return self.sort_tickets(critical, sort_by='priority', reverse=True)
     
-    def export_filtered_tickets(
-        self, 
-        tickets: List[Dict[str, Any]], 
-        filename: str = "filtered_tickets.json"
-    ) -> bool:
-        """Export filtered tickets to JSON file"""
-        try:
-            output_path = Path(__file__).parent / "datasets" / filename
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(tickets, f, indent=2, ensure_ascii=False)
-            print(f"✓ Exported {len(tickets)} tickets to {filename}")
-            return True
-        except Exception as e:
-            print(f"✗ Error exporting tickets: {e}")
-            return False
-    
     def get_summary(self, tickets: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Get summary statistics for filtered tickets"""
         if not tickets:
@@ -531,34 +515,3 @@ class TicketFilter:
             'overdue_count': overdue_count,
             'blocked_count': blocked_count
         }
-
-
-if __name__ == "__main__":
-    filter_system = TicketFilter()
-    
-    print("\n" + "="*70)
-    print("TICKET FILTER SYSTEM - DEMO")
-    print("="*70)
-    
-    print("\n[1] User Context Example:")
-    first_user = filter_system.users[0]['username']
-    user_context = filter_system.get_user_context(first_user, include_done=False)
-    if user_context:
-        print(f"  User: {user_context['user']['username']} ({user_context['user']['role']})")
-        print(f"  Total Tickets: {user_context['total_tickets']}")
-        print(f"  Overdue: {user_context['overdue_count']}")
-        print(f"  Blocked: {user_context['blocked_count']}")
-        print(f"  In Progress: {user_context['in_progress_count']}")
-    
-    print("\n[2] Project Context Example:")
-    project_context = filter_system.get_project_context("Platform", include_done=False)
-    if project_context:
-        print(f"  Project: {project_context['project']['list_name']}")
-        print(f"  Total Tickets: {project_context['total_tickets']}")
-        print(f"  Status Breakdown: {project_context['status_breakdown']}")
-    
-    print("\n[3] Critical Tickets:")
-    critical = filter_system.get_critical_tickets()
-    print(f"  Found {len(critical)} critical tickets")
-    
-    print("\n" + "="*70)

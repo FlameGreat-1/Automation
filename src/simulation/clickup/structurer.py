@@ -1,16 +1,11 @@
-class TicketStructurer:
-    """Structures ticket data optimally for LLM consumption"""
-    
 """
-Enterprise-Grade Ticket Data Structurer
+Ticket Data Structurer
 Formats ticket data optimally for LLM analysis and insights generation
 """
 
 import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
-from pathlib import Path
-import re
 
 from config import MAX_TOKENS_INPUT
 
@@ -146,40 +141,6 @@ class TicketStructurer:
         
         return "\n".join(lines)
     
-    def format_ticket_plain_text(self, ticket: Dict[str, Any], include_description: bool = True) -> str:
-        """Format single ticket as plain text for LLM"""
-        enriched = self.enrich_ticket_metadata(ticket)
-        
-        parts = [
-            f"Ticket: {enriched['name']}",
-            f"ID: {enriched['id']}",
-            f"Status: {enriched['status']['status']}",
-            f"Priority: {enriched.get('priority', {}).get('priority', 'none')}",
-            f"Type: {enriched.get('ticket_type', 'unknown')}",
-            f"Project: {enriched['_list_name']}",
-            f"Assignee: {enriched['assignee_name']}",
-            f"Age: {enriched.get('age_days', 0)} days"
-        ]
-        
-        if enriched.get('is_overdue'):
-            parts.append(f"OVERDUE: {enriched.get('days_overdue', 0)} days")
-        
-        if enriched['is_blocked']:
-            parts.append("BLOCKED")
-        
-        if include_description and enriched.get('description'):
-            parts.append(f"Description: {self.truncate_text(enriched['description'], max_length=200)}")
-        
-        return " | ".join(parts)
-    
-    def format_tickets_json(
-        self, 
-        tickets: List[Dict[str, Any]], 
-        include_descriptions: bool = False
-    ) -> List[Dict[str, Any]]:
-        """Format multiple tickets as JSON array"""
-        return [self.format_ticket_json(t, include_description=include_descriptions) for t in tickets]
-    
     def format_tickets_markdown(
         self, 
         tickets: List[Dict[str, Any]], 
@@ -260,7 +221,6 @@ class TicketStructurer:
         reserve_tokens: int = 1000
     ) -> Tuple[List[Dict[str, Any]], int]:
         """Fit tickets within token limit, prioritizing most important"""
-        
         prioritized = self.prioritize_tickets(tickets)
         
         available_tokens = self.max_tokens - reserve_tokens
@@ -271,10 +231,8 @@ class TicketStructurer:
         for ticket in prioritized:
             if format_type == 'json':
                 formatted = json.dumps(self.format_ticket_json(ticket, include_description=include_descriptions))
-            elif format_type == 'markdown':
-                formatted = self.format_ticket_markdown(ticket, include_description=include_descriptions)
             else:
-                formatted = self.format_ticket_plain_text(ticket, include_description=include_descriptions)
+                formatted = self.format_ticket_markdown(ticket, include_description=include_descriptions)
             
             ticket_tokens = self.estimate_tokens(formatted)
             
@@ -286,81 +244,6 @@ class TicketStructurer:
         
         return fitted_tickets, current_tokens
     
-    def create_llm_context(
-        self,
-        tickets: List[Dict[str, Any]],
-        context_type: str = 'user',
-        user_info: Optional[Dict[str, Any]] = None,
-        project_info: Optional[Dict[str, Any]] = None,
-        format_type: str = 'json',
-        include_descriptions: bool = False
-    ) -> Dict[str, Any]:
-        """Create optimized context for LLM with metadata"""
-        
-        fitted_tickets, token_count = self.fit_to_token_limit(
-            tickets, 
-            format_type=format_type,
-            include_descriptions=include_descriptions
-        )
-        
-        context = {
-            'context_type': context_type,
-            'total_tickets_available': len(tickets),
-            'tickets_included': len(fitted_tickets),
-            'tickets_excluded': len(tickets) - len(fitted_tickets),
-            'estimated_tokens': token_count,
-            'format': format_type,
-            'timestamp': self.now.isoformat()
-        }
-        
-        if user_info:
-            context['user'] = {
-                'username': user_info.get('username'),
-                'role': user_info.get('role'),
-                'department': user_info.get('department')
-            }
-        
-        if project_info:
-            context['project'] = {
-                'name': project_info.get('list_name'),
-                'description': project_info.get('description')
-            }
-        
-        status_breakdown = {}
-        priority_breakdown = {}
-        overdue_count = 0
-        blocked_count = 0
-        
-        for ticket in fitted_tickets:
-            enriched = self.enrich_ticket_metadata(ticket)
-            
-            status = enriched['status']['status']
-            status_breakdown[status] = status_breakdown.get(status, 0) + 1
-            
-            priority = enriched.get('priority', {}).get('priority', 'none')
-            priority_breakdown[priority] = priority_breakdown.get(priority, 0) + 1
-            
-            if enriched.get('is_overdue'):
-                overdue_count += 1
-            if enriched.get('is_blocked'):
-                blocked_count += 1
-        
-        context['summary'] = {
-            'status_breakdown': status_breakdown,
-            'priority_breakdown': priority_breakdown,
-            'overdue_count': overdue_count,
-            'blocked_count': blocked_count
-        }
-        
-        if format_type == 'json':
-            context['tickets'] = self.format_tickets_json(fitted_tickets, include_descriptions=include_descriptions)
-        elif format_type == 'markdown':
-            context['tickets'] = self.format_tickets_markdown(fitted_tickets, include_descriptions=include_descriptions)
-        else:
-            context['tickets'] = [self.format_ticket_plain_text(t, include_description=include_descriptions) for t in fitted_tickets]
-        
-        return context
-    
     def create_prompt_context(
         self,
         tickets: List[Dict[str, Any]],
@@ -369,7 +252,6 @@ class TicketStructurer:
         additional_context: Optional[str] = None
     ) -> str:
         """Create complete prompt with context for LLM"""
-        
         fitted_tickets, _ = self.fit_to_token_limit(tickets, format_type='markdown', include_descriptions=False)
         
         prompt_parts = []
@@ -394,138 +276,3 @@ class TicketStructurer:
         prompt_parts.append(f"# Question\n\n{question}")
         
         return "\n".join(prompt_parts)
-    
-    def create_insights_prompt(
-        self,
-        tickets: List[Dict[str, Any]],
-        user_info: Optional[Dict[str, Any]] = None,
-        focus_areas: Optional[List[str]] = None
-    ) -> str:
-        """Create specialized prompt for generating insights"""
-        
-        fitted_tickets, _ = self.fit_to_token_limit(tickets, format_type='json', include_descriptions=False)
-        
-        prompt_parts = []
-        
-        prompt_parts.append("You are an AI assistant helping a project manager analyze their team's tickets.")
-        prompt_parts.append("\n# Current Situation\n")
-        
-        if user_info:
-            prompt_parts.append(f"**Manager:** {user_info.get('username')} ({user_info.get('role')})")
-        
-        prompt_parts.append(f"**Date:** {self.now.strftime('%Y-%m-%d')}")
-        prompt_parts.append(f"**Tickets to Analyze:** {len(fitted_tickets)}")
-        
-        overdue = [t for t in fitted_tickets if self.enrich_ticket_metadata(t).get('is_overdue')]
-        blocked = [t for t in fitted_tickets if self.enrich_ticket_metadata(t).get('is_blocked')]
-        high_priority = [t for t in fitted_tickets if self.enrich_ticket_metadata(t).get('is_high_priority')]
-        
-        prompt_parts.append(f"\n**Key Metrics:**")
-        prompt_parts.append(f"- Overdue: {len(overdue)}")
-        prompt_parts.append(f"- Blocked: {len(blocked)}")
-        prompt_parts.append(f"- High Priority: {len(high_priority)}")
-        
-        prompt_parts.append("\n# Tickets Data\n")
-        prompt_parts.append("```json")
-        prompt_parts.append(json.dumps(self.format_tickets_json(fitted_tickets, include_descriptions=False), indent=2))
-        prompt_parts.append("```")
-        
-        prompt_parts.append("\n# Task\n")
-        prompt_parts.append("Analyze the tickets and provide actionable insights:")
-        
-        if focus_areas:
-            prompt_parts.append("\nFocus on:")
-            for area in focus_areas:
-                prompt_parts.append(f"- {area}")
-        else:
-            prompt_parts.append("1. What are the most critical issues that need immediate attention?")
-            prompt_parts.append("2. Are there any bottlenecks or patterns in blocked/overdue tickets?")
-            prompt_parts.append("3. What should be prioritized today?")
-            prompt_parts.append("4. Are there any team members who might be overloaded?")
-            prompt_parts.append("5. Any recommendations for improving workflow?")
-        
-        return "\n".join(prompt_parts)
-    
-    def export_context(
-        self,
-        context: Dict[str, Any],
-        filename: str = "llm_context.json"
-    ) -> bool:
-        """Export LLM context to JSON file"""
-        try:
-            output_path = Path(__file__).parent / "datasets" / filename
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(context, f, indent=2, ensure_ascii=False)
-            print(f"✓ Exported LLM context to {filename}")
-            return True
-        except Exception as e:
-            print(f"✗ Error exporting context: {e}")
-            return False
-    
-    def validate_context(self, context: Dict[str, Any]) -> Tuple[bool, List[str]]:
-        """Validate LLM context structure and content"""
-        errors = []
-        
-        if 'tickets' not in context:
-            errors.append("Missing 'tickets' field")
-        
-        if 'context_type' not in context:
-            errors.append("Missing 'context_type' field")
-        
-        if 'estimated_tokens' in context:
-            if context['estimated_tokens'] > self.max_tokens:
-                errors.append(f"Token count ({context['estimated_tokens']}) exceeds limit ({self.max_tokens})")
-        
-        if 'tickets' in context and isinstance(context['tickets'], list):
-            if len(context['tickets']) == 0:
-                errors.append("No tickets in context")
-        
-        return len(errors) == 0, errors
-
-
-if __name__ == "__main__":
-    from filter import TicketFilter
-    
-    print("\n" + "="*70)
-    print("TICKET STRUCTURER - DEMO")
-    print("="*70)
-    
-    filter_system = TicketFilter()
-    structurer = TicketStructurer(max_tokens=8000)
-    
-    # Use first user from actual data
-    first_user = filter_system.users[0]['username']
-    user_tickets = filter_system.filter_by_assignee(first_user)
-    user_info = filter_system.get_user_by_username(first_user)
-    
-    print(f"\n[1] Creating LLM Context (JSON format)")
-    context = structurer.create_llm_context(
-        tickets=user_tickets,
-        context_type='user',
-        user_info=user_info,
-        format_type='json',
-        include_descriptions=False
-    )
-    print(f"  Total tickets: {context['total_tickets_available']}")
-    print(f"  Included: {context['tickets_included']}")
-    print(f"  Estimated tokens: {context['estimated_tokens']}")
-    print(f"  Summary: {context['summary']}")
-    
-    print(f"\n[2] Creating Insights Prompt")
-    prompt = structurer.create_insights_prompt(
-        tickets=user_tickets,
-        user_info=user_info
-    )
-    print(f"  Prompt length: {len(prompt)} characters")
-    print(f"  Estimated tokens: {structurer.estimate_tokens(prompt)}")
-    
-    print(f"\n[3] Validating Context")
-    is_valid, errors = structurer.validate_context(context)
-    if is_valid:
-        print(f"  ✓ Context is valid")
-    else:
-        print(f"  ✗ Validation errors:")
-        for error in errors:
-            print(f"    - {error}")
-    
-    print("\n" + "="*70)

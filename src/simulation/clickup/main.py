@@ -9,14 +9,16 @@ import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+import time
+import re
 
-# Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src' / 'simulation' / 'clickup'))
 
 from filter import TicketFilter
 from structurer import TicketStructurer
 from llm_client import LLMClient
 from insights_generator import InsightsGenerator
+from config import INSIGHTS_OUTPUT_DIR
 
 
 class TicketIntelligenceSystem:
@@ -27,7 +29,7 @@ class TicketIntelligenceSystem:
         self.structurer = None
         self.llm_client = None
         self.insights_generator = None
-        self.insights_dir = Path('src/simulation/clickup/datasets/insights')
+        self.insights_dir = INSIGHTS_OUTPUT_DIR
         
     def clear_screen(self):
         """Clear terminal screen"""
@@ -44,60 +46,40 @@ class TicketIntelligenceSystem:
         print("MANAGEMENT:")
         print("  1. Generate data")
         print("  2. Preprocess")
-        print("  3. Filter")
-        print("  4. Structure")
-        print("  5. LLM")
-        print("  6. All (Run 1-5)")
+        print("  3. All (Run 1-2)")
         print()
         print("INSIGHTS:")
-        print("  7. Daily summary (specific user)")
-        print("  8. Daily summary (all users)")
-        print("  9. Project overview (specific project)")
-        print("  10. Overviews for ALL projects")
-        print("  11. Critical alerts (workspace-wide)")
-        print("  12. Workspace analysis")
+        print("  4. Daily summary (specific user)")
+        print("  5. Daily summary (all users)")
+        print("  6. Project overview (specific project)")
+        print("  7. Overviews for ALL projects")
+        print("  8. Critical alerts (workspace-wide)")
+        print("  9. Workspace analysis")
         print()
         print("  0. Exit")
         print()
     
     def stream_and_save(self, content: str, filename: str):
-        """Stream content to terminal (clean text) and save to markdown file"""
-        import time
-        import re
-        
-        # Stream to terminal
+        """Stream content to terminal and save to markdown file"""
         print("\n" + "="*70)
         print("STREAMING INSIGHTS:")
         print("="*70 + "\n")
         
-        # Strip markdown syntax for clean terminal display
         clean_content = content
-        
-        # Remove markdown headers (# ## ###)
         clean_content = re.sub(r'^#{1,6}\s+', '', clean_content, flags=re.MULTILINE)
-        
-        # Remove bold (**text** or __text__)
         clean_content = re.sub(r'\*\*(.+?)\*\*', r'\1', clean_content)
         clean_content = re.sub(r'__(.+?)__', r'\1', clean_content)
-        
-        # Remove italic (*text* or _text_)
         clean_content = re.sub(r'\*(.+?)\*', r'\1', clean_content)
         clean_content = re.sub(r'_(.+?)_', r'\1', clean_content)
-        
-        # Remove inline code (`code`)
         clean_content = re.sub(r'`(.+?)`', r'\1', clean_content)
-        
-        # Remove links [text](url) -> text
         clean_content = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', clean_content)
         
-        # Stream character by character (like ChatGPT)
         for char in clean_content:
             print(char, end='', flush=True)
-            time.sleep(0.001)  # 1ms delay per character (adjust for speed)
+            time.sleep(0.001)
         
         print("\n" + "="*70)
         
-        # Save full markdown to file
         self.insights_dir.mkdir(parents=True, exist_ok=True)
         filepath = self.insights_dir / filename
         
@@ -119,27 +101,9 @@ class TicketIntelligenceSystem:
         os.system('python src/simulation/clickup/preprocessor.py')
         input("\nPress Enter to continue...")
     
-    def run_filter(self):
-        """Option 3: Test filtering"""
-        print("\n[3] Testing filter system...")
-        os.system('python src/simulation/clickup/filter.py')
-        input("\nPress Enter to continue...")
-    
-    def run_structure(self):
-        """Option 4: Test structuring"""
-        print("\n[4] Testing structurer...")
-        os.system('python src/simulation/clickup/structurer.py')
-        input("\nPress Enter to continue...")
-    
-    def run_llm(self):
-        """Option 5: Test LLM connection"""
-        print("\n[5] Testing LLM connection...")
-        os.system('python src/simulation/clickup/llm_client.py')
-        input("\nPress Enter to continue...")
-    
     def run_all_management(self):
-        """Option 6: Run all management tasks"""
-        print("\n[6] Running all management tasks...\n")
+        """Option 3: Run all management tasks"""
+        print("\n[3] Running all management tasks...\n")
         self.run_generate_data()
         self.run_preprocess()
         print("\n✓ All management tasks complete!")
@@ -148,7 +112,7 @@ class TicketIntelligenceSystem:
     def initialize_insights_system(self):
         """Initialize insights generator if not already done"""
         if self.insights_generator is None:
-            print("\nInitializing insights system...")
+            print("\nInitializing system...")
             try:
                 self.insights_generator = InsightsGenerator()
                 self.filter_system = TicketFilter()
@@ -164,13 +128,12 @@ class TicketIntelligenceSystem:
         return True  
 
     def run_user_summary(self):
-        """Option 7: Daily summary for specific user"""
+        """Option 4: Daily summary for specific user"""
         if not self.initialize_insights_system():
             return
         
-        print("\n[7] Daily Summary - Specific User\n")
+        print("\n[4] Daily Summary - Specific User\n")
         
-        # Show available users
         print("Available users:")
         for i, user in enumerate(self.filter_system.users[:10], 1):
             user_tickets = self.filter_system.filter_by_assignee(user['username'])
@@ -181,7 +144,6 @@ class TicketIntelligenceSystem:
         
         user_input = input("\nEnter username or number (or press Enter for first user): ").strip()
         
-        # Handle input
         if not user_input:
             username = self.filter_system.users[0]['username']
         elif user_input.isdigit():
@@ -211,14 +173,13 @@ class TicketIntelligenceSystem:
             print(f"\n✗ Error: {e}")
         
         input("\nPress Enter to continue...")
-
     
     def run_all_users_summary(self):
-        """Option 8: Daily summary for all users"""
+        """Option 5: Daily summary for all users"""
         if not self.initialize_insights_system():
             return
         
-        print("\n[8] Daily Summary - All Users\n")
+        print("\n[5] Daily Summary - All Users\n")
         
         total_users = len(self.filter_system.users)
         print(f"Processing {total_users} users...\n")
@@ -236,10 +197,7 @@ class TicketIntelligenceSystem:
                 if result['success'] and result['metadata']['total_tickets'] > 0:
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                     filename = f"insights_user_{username}_{timestamp}.md"
-                    
-                    # Use stream_and_save for streaming output
                     self.stream_and_save(result['summary'], filename)
-                    
                     print(f"  ✓ {username} saved ({result['metadata']['total_tickets']} tickets)\n")
                     successful += 1
                 else:
@@ -254,13 +212,12 @@ class TicketIntelligenceSystem:
         input("\nPress Enter to continue...")
     
     def run_project_overview(self):
-        """Option 9: Project overview for specific project"""
+        """Option 6: Project overview for specific project"""
         if not self.initialize_insights_system():
             return
         
-        print("\n[9] Project Overview - Specific Project\n")
+        print("\n[6] Project Overview - Specific Project\n")
         
-        # Get unique projects
         projects = list(set([t['_list_name'] for t in self.filter_system.tickets]))
         
         print("Available projects:")
@@ -273,7 +230,6 @@ class TicketIntelligenceSystem:
         
         project_input = input("\nEnter project name or number (or press Enter for first): ").strip()
         
-        # Handle input
         if not project_input:
             project_name = projects[0]
         elif project_input.isdigit():
@@ -295,7 +251,7 @@ class TicketIntelligenceSystem:
             if result['success']:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 filename = f"insights_project_{project_name.replace(' ', '_')}_{timestamp}.md"
-                self.stream_and_save(result['overview'], filename)  # FIXED: 'summary' → 'overview'
+                self.stream_and_save(result['overview'], filename)
             else:
                 print(f"\n✗ Error: {result.get('error', 'Unknown error')}")
         
@@ -305,14 +261,13 @@ class TicketIntelligenceSystem:
         input("\nPress Enter to continue...")
     
     def run_all_projects_overview(self):
-        """Option 10: Overviews for all projects"""
+        """Option 7: Overviews for all projects"""
         if not self.initialize_insights_system():
             return
         
-        print("\n[10] Project Overviews - All Projects\n")
+        print("\n[7] Project Overviews - All Projects\n")
         
         projects = list(set([t['_list_name'] for t in self.filter_system.tickets]))
-        
         print(f"Processing {len(projects)} projects...\n")
         
         successful = 0
@@ -326,10 +281,7 @@ class TicketIntelligenceSystem:
                 if result['success']:
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                     filename = f"insights_project_{project_name.replace(' ', '_')}_{timestamp}.md"
-                    
-                    # Use stream_and_save for streaming output
                     self.stream_and_save(result['overview'], filename)
-                    
                     print(f"  ✓ {project_name} saved ({result['metadata']['total_tickets']} tickets)\n")
                     successful += 1
                 else:
@@ -342,11 +294,11 @@ class TicketIntelligenceSystem:
         input("\nPress Enter to continue...")
     
     def run_critical_alerts(self):
-        """Option 11: Critical alerts workspace-wide"""
+        """Option 8: Critical alerts workspace-wide"""
         if not self.initialize_insights_system():
             return
         
-        print("\n[11] Critical Alerts - Workspace Wide\n")
+        print("\n[8] Critical Alerts - Workspace Wide\n")
         print("Generating critical alerts...")
         
         try:
@@ -355,7 +307,7 @@ class TicketIntelligenceSystem:
             if result['success']:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 filename = f"insights_critical_alerts_{timestamp}.md"
-                self.stream_and_save(result['alerts'], filename)  # FIXED: 'summary' → 'alerts'
+                self.stream_and_save(result['alerts'], filename)
             else:
                 print(f"\n✗ Error: {result.get('error', 'Unknown error')}")
         
@@ -365,16 +317,15 @@ class TicketIntelligenceSystem:
         input("\nPress Enter to continue...")
     
     def run_workspace_analysis(self):
-        """Option 12: Complete workspace analysis"""
+        """Option 9: Complete workspace analysis"""
         if not self.initialize_insights_system():
             return
         
-        print("\n[12] Complete Workspace Analysis\n")
+        print("\n[9] Complete Workspace Analysis\n")
         print("Generating workspace analysis...\n")
         
         projects = list(set([t['_list_name'] for t in self.filter_system.tickets]))
         
-        # Critical alerts
         print("[1/2] Generating critical alerts...\n")
         try:
             result = self.insights_generator.generate_critical_alerts()
@@ -386,7 +337,6 @@ class TicketIntelligenceSystem:
         except Exception as e:
             print(f"  ✗ Error: {e}\n")
         
-        # All projects
         print("[2/2] Generating project overviews...\n")
         successful = 0
         for i, project_name in enumerate(projects, 1):
@@ -426,24 +376,18 @@ class TicketIntelligenceSystem:
             elif choice == '2':
                 self.run_preprocess()
             elif choice == '3':
-                self.run_filter()
-            elif choice == '4':
-                self.run_structure()
-            elif choice == '5':
-                self.run_llm()
-            elif choice == '6':
                 self.run_all_management()
-            elif choice == '7':
+            elif choice == '4':
                 self.run_user_summary()
-            elif choice == '8':
+            elif choice == '5':
                 self.run_all_users_summary()
-            elif choice == '9':
+            elif choice == '6':
                 self.run_project_overview()
-            elif choice == '10':
+            elif choice == '7':
                 self.run_all_projects_overview()
-            elif choice == '11':
+            elif choice == '8':
                 self.run_critical_alerts()
-            elif choice == '12':
+            elif choice == '9':
                 self.run_workspace_analysis()
             else:
                 print("\n✗ Invalid choice. Please try again.")

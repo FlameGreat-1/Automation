@@ -1,6 +1,3 @@
-class InsightsGenerator:
-    """Enterprise-grade ticket insights generator using LLM"""
-    
 """
 Enterprise-Grade Ticket Insights Generator
 Orchestrates filtering, structuring, and LLM calls to generate actionable insights
@@ -14,11 +11,12 @@ from pathlib import Path
 from filter import TicketFilter
 from structurer import TicketStructurer
 from llm_client import LLMClient
-from config import MAX_TOKENS_INPUT, MAX_TOKENS_OUTPUT
+from prompts import get_prompt
+from config import MAX_TOKENS_INPUT, MAX_TOKENS_OUTPUT, INSIGHTS_OUTPUT_DIR
 
 
 class InsightsGenerator:
-    """Enterprise-grade ticket insights generator using LLM"""
+    """Ticket insights generator using LLM"""
     
     def __init__(
         self,
@@ -30,6 +28,33 @@ class InsightsGenerator:
         self.structurer = TicketStructurer(max_tokens=max_tokens)
         self.llm = LLMClient(provider=provider, api_key=api_key)
         self.now = datetime.now()
+        self.output_dir = Path(INSIGHTS_OUTPUT_DIR)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def _call_llm(
+        self,
+        prompt: str,
+        system_prompt: str,
+        temperature: float = 0.7
+    ) -> Dict[str, Any]:
+        """Internal LLM call wrapper"""
+        response = self.llm.call_with_retry(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature
+        )
+        
+        success, content, metadata = self.llm.parse_response(response)
+        
+        return {
+            'success': success,
+            'insights': content if success else None,
+            'error': content if not success else None,
+            'metadata': metadata,
+            'timestamp': datetime.now().isoformat(),
+            'provider': self.llm.provider,
+            'model': self.llm.model
+        }
     
     def generate_user_daily_summary(
         self,
@@ -37,7 +62,6 @@ class InsightsGenerator:
         include_recommendations: bool = True
     ) -> Dict[str, Any]:
         """Generate daily summary for a specific user"""
-        
         user_context = self.filter.get_user_context(username, include_done=False, days_back=30)
         
         if not user_context or user_context['total_tickets'] == 0:
@@ -49,33 +73,47 @@ class InsightsGenerator:
         user_info = user_context['user']
         tickets = user_context['all_tickets']
         
-        prompt = self.structurer.create_insights_prompt(
-            tickets=tickets,
-            user_info=user_info,
-            focus_areas=[
-                "What are the most critical tasks for today?",
-                "Which overdue or blocked tickets need immediate attention?",
-                "Are there any potential bottlenecks or risks?",
-                "What should be prioritized this week?"
-            ] if include_recommendations else None
+        fitted_tickets, _ = self.structurer.fit_to_token_limit(
+            tickets, 
+            format_type='json', 
+            include_descriptions=False
         )
         
-        system_prompt = f"""You are an AI project management assistant helping {user_info['username']}, 
-a {user_info['role']} in the {user_info['department']} department.
-
-Provide a clear, actionable daily summary focusing on:
-1. Critical items needing immediate attention
-2. Overdue and blocked tickets
-3. High-priority work
-4. Recommendations for the day
-
-Be concise, specific, and action-oriented."""
+        prompt_parts = []
+        prompt_parts.append(f"# Daily Summary for {user_info['username']}")
+        prompt_parts.append(f"\n**Date:** {self.now.strftime('%Y-%m-%d')}")
+        prompt_parts.append(f"**Total Tickets:** {len(fitted_tickets)}")
+        prompt_parts.append(f"**Overdue:** {user_context['overdue_count']}")
+        prompt_parts.append(f"**Blocked:** {user_context['blocked_count']}")
+        prompt_parts.append(f"**In Progress:** {user_context['in_progress_count']}")
+        prompt_parts.append(f"**High Priority:** {user_context['high_priority_count']}")
         
-        response = self.llm.generate_insights(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            temperature=0.7
+        prompt_parts.append("\n# Tickets\n")
+        prompt_parts.append("```json")
+        formatted_tickets = [
+            self.structurer.format_ticket_json(t, include_description=False) 
+            for t in fitted_tickets
+        ]
+        prompt_parts.append(json.dumps(formatted_tickets, indent=2))
+        prompt_parts.append("```")
+        
+        if include_recommendations:
+            prompt_parts.append("\n# Focus Areas:")
+            prompt_parts.append("- What are the most critical tasks for today?")
+            prompt_parts.append("- Which overdue or blocked tickets need immediate attention?")
+            prompt_parts.append("- Are there any potential bottlenecks or risks?")
+            prompt_parts.append("- What should be prioritized this week?")
+        
+        prompt = "\n".join(prompt_parts)
+        
+        system_prompt = get_prompt(
+            'user_daily_summary',
+            username=user_info['username'],
+            role=user_info['role'],
+            department=user_info['department']
         )
+        
+        response = self._call_llm(prompt, system_prompt, temperature=0.7)
         
         if response['success']:
             return {
@@ -104,7 +142,6 @@ Be concise, specific, and action-oriented."""
         include_team_analysis: bool = True
     ) -> Dict[str, Any]:
         """Generate comprehensive project overview"""
-        
         project_context = self.filter.get_project_context(project_name, include_done=False)
         
         if not project_context or project_context['total_tickets'] == 0:
@@ -141,22 +178,9 @@ Be concise, specific, and action-oriented."""
         
         prompt = "\n".join(context_parts)
         
-        system_prompt = f"""You are an AI project management assistant analyzing the {project_name} project.
-
-Provide a comprehensive project overview including:
-1. Overall project health assessment
-2. Critical risks and blockers
-3. Progress analysis (are we on track?)
-4. Team workload balance
-5. Recommendations for project success
-
-Be data-driven, specific, and actionable."""
+        system_prompt = get_prompt('project_overview', project_name=project_name)
         
-        response = self.llm.generate_insights(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            temperature=0.7
-        )
+        response = self._call_llm(prompt, system_prompt, temperature=0.7)
         
         if response['success']:
             return {
@@ -184,7 +208,6 @@ Be data-driven, specific, and actionable."""
         username: Optional[str] = None
     ) -> Dict[str, Any]:
         """Generate alerts for critical tickets"""
-        
         critical_tickets = self.filter.get_critical_tickets(username=username)
         
         if not critical_tickets:
@@ -193,10 +216,6 @@ Be data-driven, specific, and actionable."""
                 'alerts': 'No critical tickets found. All systems normal.',
                 'critical_count': 0
             }
-        
-        user_info = None
-        if username:
-            user_info = self.filter.get_user_by_username(username)
         
         context_parts = [
             f"# Critical Tickets Alert",
@@ -208,22 +227,9 @@ Be data-driven, specific, and actionable."""
         context_parts.append(self.structurer.format_tickets_markdown(critical_tickets, include_descriptions=True, add_summary=False))
         
         prompt = "\n".join(context_parts)
+        system_prompt = get_prompt('critical_alerts')
         
-        system_prompt = """You are an AI alert system for critical project issues.
-
-Analyze the critical tickets and provide:
-1. Severity assessment (how critical is the situation?)
-2. Immediate action items
-3. Who should be notified
-4. Potential impact if not addressed
-
-Be urgent, clear, and specific about required actions."""
-        
-        response = self.llm.generate_insights(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            temperature=0.5
-        )
+        response = self._call_llm(prompt, system_prompt, temperature=0.5)
         
         if response['success']:
             return {
@@ -256,7 +262,6 @@ Be urgent, clear, and specific about required actions."""
         department: str
     ) -> Dict[str, Any]:
         """Generate team/department workload analysis"""
-        
         team_context = self.filter.get_team_context(department, include_done=False)
         
         if not team_context or team_context['total_tickets'] == 0:
@@ -284,23 +289,9 @@ Be urgent, clear, and specific about required actions."""
         context_parts.append(self.structurer.format_tickets_markdown(tickets, include_descriptions=False, add_summary=False))
         
         prompt = "\n".join(context_parts)
+        system_prompt = get_prompt('team_analysis', department=department)
         
-        system_prompt = f"""You are an AI team management assistant analyzing the {department} department.
-
-Provide a comprehensive team analysis including:
-1. Workload balance assessment (is work distributed fairly?)
-2. Team bottlenecks and capacity issues
-3. Members who may be overloaded or underutilized
-4. Collaboration opportunities
-5. Recommendations for improving team efficiency
-
-Be specific about team dynamics and actionable improvements."""
-        
-        response = self.llm.generate_insights(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            temperature=0.7
-        )
+        response = self._call_llm(prompt, system_prompt, temperature=0.7)
         
         if response['success']:
             return {
@@ -328,7 +319,6 @@ Be specific about team dynamics and actionable improvements."""
         context_info: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Generate custom insights based on specific question"""
-        
         if not tickets:
             return {
                 'success': False,
@@ -349,15 +339,9 @@ Be specific about team dynamics and actionable improvements."""
             additional_context=additional_context
         )
         
-        system_prompt = """You are an expert AI project management assistant.
-Analyze the provided ticket data and answer the question with specific, actionable insights.
-Use data from the tickets to support your analysis."""
+        system_prompt = get_prompt('custom_insights')
         
-        response = self.llm.generate_insights(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            temperature=0.7
-        )
+        response = self._call_llm(prompt, system_prompt, temperature=0.7)
         
         if response['success']:
             return {
@@ -376,217 +360,3 @@ Use data from the tickets to support your analysis."""
                 'error': response.get('error', 'Failed to generate insights')
             }
     
-    def format_insights_markdown(self, insights: Dict[str, Any]) -> str:
-        """Format insights as readable Markdown"""
-        
-        if not insights.get('success'):
-            return f"# Error\n\n{insights.get('error', 'Unknown error')}"
-        
-        lines = []
-        
-        if 'user' in insights:
-            user = insights['user']
-            lines.append(f"# Daily Summary for {user['username']}")
-            lines.append(f"**Role:** {user['role']} | **Department:** {user['department']}")
-            lines.append(f"**Date:** {self.now.strftime('%Y-%m-%d')}")
-            lines.append("\n---\n")
-            
-            if 'metadata' in insights:
-                meta = insights['metadata']
-                lines.append("## Quick Stats")
-                lines.append(f"- Total Active Tickets: {meta.get('total_tickets', 0)}")
-                lines.append(f"- Overdue: {meta.get('overdue_count', 0)}")
-                lines.append(f"- Blocked: {meta.get('blocked_count', 0)}")
-                lines.append(f"- In Progress: {meta.get('in_progress_count', 0)}")
-                lines.append(f"- High Priority: {meta.get('high_priority_count', 0)}")
-                lines.append("\n---\n")
-            
-            lines.append("## Insights\n")
-            lines.append(insights.get('summary', ''))
-        
-        elif 'project' in insights:
-            project = insights['project']
-            lines.append(f"# Project Overview: {project['list_name']}")
-            lines.append(f"**Date:** {self.now.strftime('%Y-%m-%d')}")
-            lines.append("\n---\n")
-            
-            if 'metadata' in insights:
-                meta = insights['metadata']
-                lines.append("## Project Stats")
-                lines.append(f"- Total Active Tickets: {meta.get('total_tickets', 0)}")
-                lines.append(f"- Overdue: {meta.get('overdue_count', 0)}")
-                lines.append(f"- Blocked: {meta.get('blocked_count', 0)}")
-                
-                if 'status_breakdown' in meta:
-                    lines.append("\n**Status Distribution:**")
-                    for status, count in meta['status_breakdown'].items():
-                        lines.append(f"- {status}: {count}")
-                
-                lines.append("\n---\n")
-            
-            lines.append("## Analysis\n")
-            lines.append(insights.get('overview', ''))
-        
-        elif 'department' in insights:
-            lines.append(f"# Team Analysis: {insights['department']} Department")
-            lines.append(f"**Date:** {self.now.strftime('%Y-%m-%d')}")
-            lines.append("\n---\n")
-            
-            if 'metadata' in insights:
-                meta = insights['metadata']
-                lines.append("## Team Stats")
-                lines.append(f"- Team Size: {meta.get('team_size', 0)}")
-                lines.append(f"- Total Tickets: {meta.get('total_tickets', 0)}")
-                lines.append("\n---\n")
-            
-            lines.append("## Analysis\n")
-            lines.append(insights.get('analysis', ''))
-        
-        elif 'alerts' in insights:
-            lines.append("# Critical Alerts")
-            lines.append(f"**Date:** {self.now.strftime('%Y-%m-%d')}")
-            lines.append(f"**Critical Tickets:** {insights.get('critical_count', 0)}")
-            lines.append("\n---\n")
-            lines.append(insights.get('alerts', ''))
-        
-        elif 'question' in insights:
-            lines.append(f"# Custom Analysis")
-            lines.append(f"**Question:** {insights['question']}")
-            lines.append(f"**Date:** {self.now.strftime('%Y-%m-%d')}")
-            lines.append("\n---\n")
-            lines.append(insights.get('answer', ''))
-        
-        return "\n".join(lines)
-    
-    def export_insights(
-        self,
-        insights: Dict[str, Any],
-        filename: Optional[str] = None,
-        format_type: str = 'markdown'
-    ) -> bool:
-        """Export insights to file"""
-        
-        if not filename:
-            timestamp = self.now.strftime('%Y%m%d_%H%M%S')
-            if 'user' in insights:
-                filename = f"insights_user_{insights['user']['username']}_{timestamp}"
-            elif 'project' in insights:
-                filename = f"insights_project_{insights['project']['list_name']}_{timestamp}"
-            elif 'department' in insights:
-                filename = f"insights_team_{insights['department']}_{timestamp}"
-            else:
-                filename = f"insights_{timestamp}"
-        
-        output_dir = Path(__file__).parent / "datasets" / "insights"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        try:
-            if format_type == 'markdown':
-                filepath = output_dir / f"{filename}.md"
-                content = self.format_insights_markdown(insights)
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    f.write(content)
-            else:
-                filepath = output_dir / f"{filename}.json"
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(insights, f, indent=2, ensure_ascii=False)
-            
-            print(f"✓ Insights exported to {filepath.name}")
-            return True
-        
-        except Exception as e:
-            print(f"✗ Error exporting insights: {e}")
-            return False
-    
-    def batch_generate_user_summaries(
-        self,
-        usernames: Optional[List[str]] = None
-    ) -> Dict[str, Dict[str, Any]]:
-        """Generate daily summaries for multiple users"""
-        
-        if not usernames:
-            usernames = [u['username'] for u in self.filter.users]
-        
-        results = {}
-        
-        print(f"\nGenerating summaries for {len(usernames)} users...")
-        
-        for i, username in enumerate(usernames, 1):
-            print(f"[{i}/{len(usernames)}] Processing {username}...")
-            
-            result = self.generate_user_daily_summary(username)
-            results[username] = result
-            
-            if result['success']:
-                print(f"  ✓ Summary generated")
-            else:
-                print(f"  ✗ {result.get('error', 'Failed')}")
-        
-        return results
-
-
-if __name__ == "__main__":
-    from filter import TicketFilter
-    
-    print("\n" + "="*70)
-    print("INSIGHTS GENERATOR - DEMO")
-    print("="*70)
-    
-    try:
-        generator = InsightsGenerator()
-        filter_system = TicketFilter()
-        
-        print("\n[1] Testing LLM connection...")
-        success, message = generator.llm.test_connection()
-        if success:
-            print(f"  ✓ {message}")
-        else:
-            print(f"  ✗ {message}")
-            print("\nPlease configure LLM_API_KEY in .env file")
-            exit(1)
-        
-        print("\n[2] Generating user daily summary...") 
-        first_user = filter_system.users[0]['username']
-        user_summary = generator.generate_user_daily_summary(first_user)
-        
-        if user_summary['success']:
-            print(f"  ✓ Summary generated for {user_summary['user']['username']}")
-            print(f"  Tickets analyzed: {user_summary['metadata']['total_tickets']}")
-            print(f"\n  Preview:")
-            print(f"  {user_summary['summary'][:200]}...")
-            
-            generator.export_insights(user_summary, format_type='markdown')
-        else:
-            print(f"  ✗ {user_summary.get('error')}")
-        
-        print("\n[3] Generating project overview...")
-        project_overview = generator.generate_project_overview("Platform")
-        
-        if project_overview['success']:
-            print(f"  ✓ Overview generated for {project_overview['project']['list_name']}")
-            print(f"  Tickets analyzed: {project_overview['metadata']['total_tickets']}")
-            
-            generator.export_insights(project_overview, format_type='markdown')
-        else:
-            print(f"  ✗ {project_overview.get('error')}")
-        
-        print("\n[4] Generating critical alerts...")
-        alerts = generator.generate_critical_alerts()
-        
-        if alerts['success']:
-            print(f"  ✓ Alerts generated")
-            print(f"  Critical tickets: {alerts['critical_count']}")
-            
-            if alerts['critical_count'] > 0:
-                generator.export_insights(alerts, format_type='markdown')
-        else:
-            print(f"  ✗ {alerts.get('error')}")
-        
-        print("\n" + "="*70)
-        print("✓ Demo complete! Check src/simulation/clickup/datasets/insights/")
-        print("="*70)
-    
-    except Exception as e:
-        print(f"\n✗ Error: {e}")
-        import traceback
-        traceback.print_exc()

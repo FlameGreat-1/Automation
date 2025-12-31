@@ -1,8 +1,5 @@
-class LLMClient:
-    """Enterprise-grade LLM API client for ticket insights"""
-    
 """
-Enterprise-Grade LLM API Client
+LLM API Client
 Handles API calls to various LLM providers for ticket insights generation
 """
 
@@ -11,7 +8,6 @@ import time
 import json
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
-import requests
 
 from config import (
     LLM_PROVIDER, LLM_API_KEY, LLM_MODELS, 
@@ -21,6 +17,36 @@ from config import (
 
 class LLMClient:
     """Enterprise-grade LLM API client for ticket insights"""
+    
+    PROVIDERS = {
+        "openai": {
+            "content_extractor": lambda r, is_new_api: r.output_text if is_new_api else r.choices[0].message.content,
+            "usage_extractor": lambda u, is_new_api: {
+                "prompt_tokens": getattr(u, "prompt_tokens", 0) if is_new_api else u.prompt_tokens,
+                "completion_tokens": getattr(u, "completion_tokens", 0) if is_new_api else u.completion_tokens,
+                "total_tokens": getattr(u, "total_tokens", 0) if is_new_api else u.total_tokens
+            },
+            "finish_reason_extractor": lambda r, is_new_api: "stop" if is_new_api else r.choices[0].finish_reason
+        },
+        "anthropic": {
+            "content_extractor": lambda r: r.content[0].text,
+            "usage_extractor": lambda u: {
+                "prompt_tokens": u.input_tokens,
+                "completion_tokens": u.output_tokens,
+                "total_tokens": u.input_tokens + u.output_tokens
+            },
+            "finish_reason_extractor": lambda r: r.stop_reason
+        },
+        "google": {
+            "content_extractor": lambda r: r.text,
+            "usage_extractor": lambda u: {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            },
+            "finish_reason_extractor": lambda r: "stop"
+        }
+    }
     
     def __init__(
         self, 
@@ -42,7 +68,6 @@ class LLMClient:
         self._initialize_client()
     
     def _initialize_client(self):
-        """Initialize provider-specific client"""
         if self.provider == 'openai':
             try:
                 import openai
@@ -71,8 +96,19 @@ class LLMClient:
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
     
+    def _get_provider_config(self):
+        return self.PROVIDERS.get(self.client_type, {})
+    
+    def _get_model_prefix(self):
+        for prefix in ["gpt-4", "o1", "o3"]:
+            if self.model.startswith(prefix):
+                return prefix
+        return "default"
+    
+    def _is_new_api(self):
+        return self.client_type == 'openai' and self._get_model_prefix() != "default"
+    
     def count_tokens(self, text: str) -> int:
-        """Estimate token count for text"""
         if self.provider == 'openai':
             try:
                 import tiktoken
@@ -89,25 +125,33 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = MAX_TOKENS_OUTPUT
     ) -> Dict[str, Any]:
-        """Call OpenAI API"""
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
+            is_new_api = self._is_new_api()
+            
+            if is_new_api:
+                response = self.client.responses.create(
+                    model=self.model,
+                    input=messages,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens
+                )
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+            
+            config = self._get_provider_config()
+            usage = response.usage or {}
             
             return {
                 'success': True,
-                'content': response.choices[0].message.content,
+                'content': config["content_extractor"](response, is_new_api),
                 'model': response.model,
-                'usage': {
-                    'prompt_tokens': response.usage.prompt_tokens,
-                    'completion_tokens': response.usage.completion_tokens,
-                    'total_tokens': response.usage.total_tokens
-                },
-                'finish_reason': response.choices[0].finish_reason
+                'usage': config["usage_extractor"](usage, is_new_api),
+                'finish_reason': config["finish_reason_extractor"](response, is_new_api)
             }
         except Exception as e:
             return {
@@ -122,7 +166,6 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = MAX_TOKENS_OUTPUT
     ) -> Dict[str, Any]:
-        """Call Anthropic Claude API"""
         try:
             system_message = None
             user_messages = []
@@ -141,16 +184,14 @@ class LLMClient:
                 messages=user_messages
             )
             
+            config = self._get_provider_config()
+            
             return {
                 'success': True,
-                'content': response.content[0].text,
+                'content': config["content_extractor"](response),
                 'model': response.model,
-                'usage': {
-                    'prompt_tokens': response.usage.input_tokens,
-                    'completion_tokens': response.usage.output_tokens,
-                    'total_tokens': response.usage.input_tokens + response.usage.output_tokens
-                },
-                'finish_reason': response.stop_reason
+                'usage': config["usage_extractor"](response.usage),
+                'finish_reason': config["finish_reason_extractor"](response)
             }
         except Exception as e:
             return {
@@ -165,7 +206,6 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = MAX_TOKENS_OUTPUT
     ) -> Dict[str, Any]:
-        """Call Google Gemini API"""
         try:
             prompt_parts = []
             for msg in messages:
@@ -182,16 +222,14 @@ class LLMClient:
                 }
             )
             
+            config = self._get_provider_config()
+            
             return {
                 'success': True,
-                'content': response.text,
+                'content': config["content_extractor"](response),
                 'model': self.model,
-                'usage': {
-                    'prompt_tokens': 0,
-                    'completion_tokens': 0,
-                    'total_tokens': 0
-                },
-                'finish_reason': 'stop'
+                'usage': config["usage_extractor"](None),
+                'finish_reason': config["finish_reason_extractor"](response)
             }
         except Exception as e:
             return {
@@ -207,7 +245,6 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = MAX_TOKENS_OUTPUT
     ) -> Dict[str, Any]:
-        """Universal LLM call method"""
         messages = []
         
         if system_prompt:
@@ -234,7 +271,6 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = MAX_TOKENS_OUTPUT
     ) -> Dict[str, Any]:
-        """Call LLM with retry logic and exponential backoff"""
         last_error = None
         
         for attempt in range(1, self.max_retries + 1):
@@ -249,20 +285,17 @@ class LLMClient:
                 
                 if 'rate_limit' in error_type.lower() or 'rate limit' in str(last_error).lower():
                     wait_time = (2 ** attempt) + (attempt * 0.5)
-                    print(f"Rate limit hit. Waiting {wait_time:.1f}s before retry {attempt}/{self.max_retries}")
                     time.sleep(wait_time)
                     continue
                 
                 if attempt < self.max_retries:
                     wait_time = 2 ** attempt
-                    print(f"Attempt {attempt} failed: {last_error}. Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                 
             except Exception as e:
                 last_error = str(e)
                 if attempt < self.max_retries:
                     wait_time = 2 ** attempt
-                    print(f"Exception on attempt {attempt}: {e}. Retrying in {wait_time}s...")
                     time.sleep(wait_time)
         
         return {
@@ -272,7 +305,6 @@ class LLMClient:
         }
     
     def parse_response(self, response: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
-        """Parse and validate LLM response"""
         if not response.get('success'):
             return False, response.get('error', 'Unknown error'), {}
         
@@ -291,7 +323,6 @@ class LLMClient:
         return True, content, metadata
     
     def extract_json_from_response(self, content: str) -> Optional[Dict[str, Any]]:
-        """Extract JSON from LLM response (handles markdown code blocks)"""
         content = content.strip()
         
         if content.startswith('```json'):
@@ -317,166 +348,17 @@ class LLMClient:
         
         return None
     
-    def generate_insights(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
-        parse_json: bool = False
-    ) -> Dict[str, Any]:
-        """Generate insights from tickets with full error handling"""
-        
-        if not system_prompt:
-            system_prompt = """You are an expert project management AI assistant. 
-Analyze ticket data and provide clear, actionable insights.
-Focus on identifying bottlenecks, risks, and opportunities for improvement.
-Be concise and specific in your recommendations."""
-        
-        response = self.call_with_retry(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            temperature=temperature
-        )
-        
-        success, content, metadata = self.parse_response(response)
-        
-        result = {
-            'success': success,
-            'timestamp': datetime.now().isoformat(),
-            'provider': self.provider,
-            'model': self.model
-        }
-        
-        if success:
-            result['insights'] = content
-            result['metadata'] = metadata
-            
-            if parse_json:
-                json_data = self.extract_json_from_response(content)
-                if json_data:
-                    result['structured_insights'] = json_data
-        else:
-            result['error'] = content
-        
-        return result
-    
     def chat(
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.7,
         max_tokens: int = MAX_TOKENS_OUTPUT
     ) -> Dict[str, Any]:
-        """Multi-turn conversation support"""
-        
         if self.client_type == 'openai':
-            response = self.call_openai(messages, temperature, max_tokens)
+            return self.call_openai(messages, temperature, max_tokens)
         elif self.client_type == 'anthropic':
-            response = self.call_anthropic(messages, temperature, max_tokens)
+            return self.call_anthropic(messages, temperature, max_tokens)
         elif self.client_type == 'google':
-            response = self.call_google(messages, temperature, max_tokens)
+            return self.call_google(messages, temperature, max_tokens)
         else:
             return {'success': False, 'error': 'Unknown client type'}
-        
-        return response
-    
-    def validate_prompt_length(self, prompt: str, max_tokens: int = MAX_TOKENS_INPUT) -> Tuple[bool, int]:
-        """Validate prompt doesn't exceed token limit"""
-        token_count = self.count_tokens(prompt)
-        
-        if token_count > max_tokens:
-            return False, token_count
-        
-        return True, token_count
-    
-    def truncate_prompt(self, prompt: str, max_tokens: int = MAX_TOKENS_INPUT) -> str:
-        """Truncate prompt to fit within token limit"""
-        current_tokens = self.count_tokens(prompt)
-        
-        if current_tokens <= max_tokens:
-            return prompt
-        
-        ratio = max_tokens / current_tokens
-        target_length = int(len(prompt) * ratio * 0.95)
-        
-        truncated = prompt[:target_length]
-        
-        last_newline = truncated.rfind('\n')
-        if last_newline > target_length * 0.8:
-            truncated = truncated[:last_newline]
-        
-        truncated += "\n\n[Note: Content truncated to fit token limit]"
-        
-        return truncated
-    
-    def get_usage_stats(self) -> Dict[str, Any]:
-        """Get API usage statistics"""
-        return {
-            'provider': self.provider,
-            'model': self.model,
-            'max_retries': self.max_retries,
-            'timeout': self.timeout
-        }
-    
-    def test_connection(self) -> Tuple[bool, str]:
-        """Test LLM API connection"""
-        try:
-            response = self.call_llm(
-                prompt="Respond with 'OK' if you can read this.",
-                system_prompt="You are a helpful assistant.",
-                temperature=0.0,
-                max_tokens=10
-            )
-            
-            if response['success']:
-                return True, f"Connection successful. Model: {response.get('model')}"
-            else:
-                return False, f"Connection failed: {response.get('error')}"
-        
-        except Exception as e:
-            return False, f"Connection test failed: {str(e)}"
-
-
-if __name__ == "__main__":
-    print("\n" + "="*70)
-    print("LLM CLIENT - CONNECTION TEST")
-    print("="*70)
-    
-    try:
-        client = LLMClient()
-        
-        print(f"\nProvider: {client.provider}")
-        print(f"Model: {client.model}")
-        
-        print("\n[1] Testing connection...")
-        success, message = client.test_connection()
-        if success:
-            print(f"  ✓ {message}")
-        else:
-            print(f"  ✗ {message}")
-        
-        if success:
-            print("\n[2] Testing simple prompt...")
-            response = client.call_with_retry(
-                prompt="List 3 key metrics for tracking software project health.",
-                system_prompt="You are a project management expert.",
-                temperature=0.7
-            )
-            
-            if response['success']:
-                print(f"  ✓ Response received")
-                print(f"  Tokens used: {response['usage']['total_tokens']}")
-                print(f"\n  Response preview:")
-                print(f"  {response['content'][:200]}...")
-            else:
-                print(f"  ✗ Error: {response.get('error')}")
-        
-        print("\n" + "="*70)
-    
-    except Exception as e:
-        print(f"\n✗ Error initializing LLM client: {e}")
-        print("\nMake sure you have:")
-        print("1. Set LLM_API_KEY in .env file")
-        print("2. Installed required package:")
-        print("   - For OpenAI: pip install openai")
-        print("   - For Anthropic: pip install anthropic")
-        print("   - For Google: pip install google-generativeai")

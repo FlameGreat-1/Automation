@@ -1,5 +1,5 @@
 """
-Enterprise-Grade Fake Ticket Data Generator
+Fake Ticket Data Generator
 Generates realistic, connected ticket data for AI analysis
 """
 
@@ -446,7 +446,6 @@ def generate_tickets(projects: List[Dict], users: List[Dict]) -> List[Dict[str, 
             assignee = next(u for u in users if u["id"] == assignee_id)
             
             due_date = generate_due_date(created_date, status)
-            
             updated_date = created_date + random.randint(3600000, 86400000 * 7)
             
             date_closed = None
@@ -496,22 +495,19 @@ def generate_tickets(projects: List[Dict], users: List[Dict]) -> List[Dict[str, 
     
     return tickets
 
-def save_to_json(data: List[Dict], filepath: Path, data_type: str) -> bool:
+
+def save_to_json(data: List[Dict], filepath: Path, data_type: str) -> tuple:
     """Save generated data to JSON file"""
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        
-        print(f"✓ Saved {len(data)} {data_type} to {filepath.name}")
-        return True
+        return True, f"Saved {len(data)} {data_type} to {filepath.name}"
     except Exception as e:
-        print(f"✗ Error saving {data_type}: {e}")
-        return False
+        return False, f"Error saving {data_type}: {e}"
 
 
-def validate_generated_data(projects: List[Dict], users: List[Dict], tickets: List[Dict]) -> bool:
+def validate_generated_data(projects: List[Dict], users: List[Dict], tickets: List[Dict]) -> tuple:
     """Validate generated data quality and relationships"""
     errors = []
     
@@ -548,14 +544,7 @@ def validate_generated_data(projects: List[Dict], users: List[Dict], tickets: Li
         if abs(actual_pct - expected_pct) > 0.15:
             errors.append(f"Status '{status}' distribution off: expected {expected_pct:.0%}, got {actual_pct:.0%}")
     
-    if errors:
-        print("\n✗ Validation errors:")
-        for error in errors:
-            print(f"  - {error}")
-        return False
-    
-    print("\n✓ Data validation passed")
-    return True
+    return len(errors) == 0, errors
 
 
 def print_generation_summary(projects: List[Dict], users: List[Dict], tickets: List[Dict]):
@@ -657,17 +646,30 @@ def generate_all_data():
     print(f"✓ Generated {len(tickets)} tickets")
     
     print(f"\n[4/4] Validating data quality...")
-    if not validate_generated_data(projects, users, tickets):
-        print("\n✗ Data validation failed. Please review errors above.")
+    is_valid, errors = validate_generated_data(projects, users, tickets)
+    if not is_valid:
+        print("\n✗ Validation errors:")
+        for error in errors:
+            print(f"  - {error}")
         return False
+    print("✓ Data validation passed")
     
     print(f"\n[5/5] Saving to JSON files...")
-    success = True
-    success &= save_to_json(projects, FAKE_PROJECTS_FILE, "projects")
-    success &= save_to_json(users, FAKE_USERS_FILE, "users")
-    success &= save_to_json(tickets, FAKE_TICKETS_FILE, "tickets")
+    all_success = True
     
-    if success:
+    success, message = save_to_json(projects, FAKE_PROJECTS_FILE, "projects")
+    print(f"{'✓' if success else '✗'} {message}")
+    all_success &= success
+    
+    success, message = save_to_json(users, FAKE_USERS_FILE, "users")
+    print(f"{'✓' if success else '✗'} {message}")
+    all_success &= success
+    
+    success, message = save_to_json(tickets, FAKE_TICKETS_FILE, "tickets")
+    print(f"{'✓' if success else '✗'} {message}")
+    all_success &= success
+    
+    if all_success:
         print_generation_summary(projects, users, tickets)
         print(f"\n✓ Data generation complete!")
         print(f"\nFiles saved to:")

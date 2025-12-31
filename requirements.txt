@@ -10,3 +10,6 @@ mysql-connector-python==8.2.0
 
 # Configuration
 python-dotenv==1.0.0
+
+#
+openai
