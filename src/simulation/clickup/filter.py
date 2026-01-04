@@ -15,7 +15,6 @@ from config import (
     FAKE_PROJECTS_FILE, FAKE_USERS_FILE, FAKE_TICKETS_FILE
 )
 
-
 class TicketFilter:
     """Filters ticket data for LLM context generation"""
     
@@ -484,6 +483,250 @@ class TicketFilter:
         
         return self.sort_tickets(critical, sort_by='priority', reverse=True)
     
+    def filter_by_feature_keyword(self, feature_name: str) -> List[Dict[str, Any]]:
+        """
+        Search tickets by feature name using keyword matching
+        
+        Searches in ticket titles, descriptions, and custom fields for the feature name.
+        Case-insensitive search with support for partial matches.
+        
+        Args:
+            feature_name: Name of the feature to search for (e.g., "Invoice", "Authentication")
+        
+        Returns:
+            List of tickets that match the feature keyword
+        
+        """
+        if not feature_name or not feature_name.strip():
+            return []
+        
+        feature_keyword = feature_name.lower().strip()
+        matched_tickets = []
+        
+        for ticket in self.tickets:
+            title = ticket.get('name', '').lower()
+            if feature_keyword in title:
+                matched_tickets.append(ticket)
+                continue
+            
+            description = ticket.get('description', '').lower()
+            if feature_keyword in description:
+                matched_tickets.append(ticket)
+                continue
+            
+            custom_fields = ticket.get('custom_fields', [])
+            for field in custom_fields:
+                field_value = str(field.get('value', '')).lower()
+                if feature_keyword in field_value:
+                    matched_tickets.append(ticket)
+                    break
+        
+        return matched_tickets
+    
+    def filter_by_feature_smart(
+        self, 
+        feature_name: str, 
+        initial_tickets: List[Dict[str, Any]],
+        llm_client: Optional[Any] = None,
+        confidence_threshold: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """
+        LLM-based intelligent validation of feature-related tickets
+        
+        Uses LLM to validate which tickets from initial_tickets are truly related
+        to the specified feature. This catches semantically related tickets that
+        keyword search might miss (e.g., "billing" for "Invoice" feature).
+        
+        Args:
+            feature_name: Name of the feature to analyze
+            initial_tickets: Tickets from keyword search to validate
+            llm_client: Optional LLM client instance. If None, returns initial_tickets
+            confidence_threshold: Minimum confidence score (0.0-1.0) for inclusion
+        
+        Returns:
+            List of validated tickets that are truly related to the feature
+        
+        """
+        if llm_client is None:
+            return initial_tickets
+        
+        if not initial_tickets:
+            return []
+        
+        if not feature_name or not feature_name.strip():
+            return []
+        
+        ticket_summaries = []
+        for i, ticket in enumerate(initial_tickets[:50]):  
+            summary = {
+                'index': i,
+                'id': ticket['id'],
+                'title': ticket['name'],
+                'description': ticket.get('description', '')[:200],  
+                'type': ticket.get('ticket_type', 'unknown'),
+                'project': ticket.get('_list_name', 'unknown')
+            }
+            ticket_summaries.append(summary)
+        
+        prompt = f"""Analyze these tickets and identify which ones are related to the "{feature_name}" feature.
+
+A ticket is related if it:
+- Directly mentions {feature_name}
+- Implements functionality for {feature_name}
+- Fixes bugs in {feature_name}
+- Has dependencies on {feature_name}
+- Is semantically related (e.g., "billing" relates to "Invoice")
+
+Tickets:
+{json.dumps(ticket_summaries, indent=2)}
+
+Respond with ONLY a JSON array of ticket indices that are related to {feature_name}.
+Format: {{"related_indices": [0, 2, 5, ...]}}
+"""
+        
+        system_prompt = """You are a software development analyst expert at identifying feature relationships in tickets.
+Analyze tickets carefully and identify only those truly related to the specified feature.
+Be precise but not overly strict - include semantically related tickets.
+Respond with valid JSON only."""
+        
+        try:
+            response = llm_client.call_with_retry(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3  
+            )
+            
+            if not response.get('success'):
+                return initial_tickets
+            
+            content = response.get('content', '').strip()
+            
+            result_json = llm_client.extract_json_from_response(content)
+            
+            if not result_json or 'related_indices' not in result_json:
+                return initial_tickets
+            
+            related_indices = result_json['related_indices']
+            
+            validated_tickets = []
+            for idx in related_indices:
+                if 0 <= idx < len(initial_tickets):
+                    validated_tickets.append(initial_tickets[idx])
+            
+            return validated_tickets
+        
+        except Exception as e:
+            print(f"Warning: LLM validation failed ({e}), using keyword results")
+            return initial_tickets
+    
+    def get_feature_context(
+        self,
+        feature_name: str,
+        use_smart_filter: bool = True,
+        llm_client: Optional[Any] = None,
+        include_done: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Get complete context for a feature across the workspace
+        
+        Combines keyword search and optional LLM validation to find all tickets
+        related to a specific feature, then provides comprehensive context.
+        
+        Args:
+            feature_name: Name of the feature to analyze
+            use_smart_filter: Whether to use LLM validation (requires llm_client)
+            llm_client: LLM client instance for smart filtering
+            include_done: Whether to include completed tickets
+        
+        Returns:
+            Dictionary with feature context including tickets, statistics, and metadata
+        
+        """
+        keyword_tickets = self.filter_by_feature_keyword(feature_name)
+        
+        if not keyword_tickets:
+            return {
+                'feature_name': feature_name,
+                'total_tickets': 0,
+                'tickets': [],
+                'error': f'No tickets found for feature: {feature_name}'
+            }
+        
+        if use_smart_filter and llm_client:
+            validated_tickets = self.filter_by_feature_smart(
+                feature_name, 
+                keyword_tickets, 
+                llm_client
+            )
+        else:
+            validated_tickets = keyword_tickets
+        
+        if not include_done:
+            validated_tickets = [
+                t for t in validated_tickets 
+                if t['status']['status'] != 'done'
+            ]
+        
+        now_ms = int(datetime.now().timestamp() * 1000)
+        
+        status_breakdown = {}
+        for ticket in validated_tickets:
+            status = ticket['status']['status']
+            status_breakdown[status] = status_breakdown.get(status, 0) + 1
+        
+        type_breakdown = {}
+        for ticket in validated_tickets:
+            ticket_type = ticket.get('ticket_type', 'unknown')
+            type_breakdown[ticket_type] = type_breakdown.get(ticket_type, 0) + 1
+        
+        project_breakdown = {}
+        for ticket in validated_tickets:
+            project = ticket.get('_list_name', 'unknown')
+            project_breakdown[project] = project_breakdown.get(project, 0) + 1
+        
+        assignee_breakdown = {}
+        for ticket in validated_tickets:
+            if ticket['assignees']:
+                assignee = ticket['assignees'][0]['username']
+                assignee_breakdown[assignee] = assignee_breakdown.get(assignee, 0) + 1
+        
+        overdue = [
+            t for t in validated_tickets 
+            if t.get('due_date') and t['due_date'] < now_ms 
+            and t['status']['status'] != 'done'
+        ]
+        
+        blocked = [
+            t for t in validated_tickets 
+            if t['status']['status'] == 'blocked'
+        ]
+        
+        high_priority = [
+            t for t in validated_tickets 
+            if t.get('priority', {}).get('priority') in ['high', 'urgent']
+        ]
+        
+        return {
+            'feature_name': feature_name,
+            'total_tickets': len(validated_tickets),
+            'keyword_matches': len(keyword_tickets),
+            'validated_matches': len(validated_tickets),
+            'tickets': validated_tickets,
+            'status_breakdown': status_breakdown,
+            'type_breakdown': type_breakdown,
+            'project_breakdown': project_breakdown,
+            'assignee_breakdown': assignee_breakdown,
+            'overdue': overdue,
+            'blocked': blocked,
+            'high_priority': high_priority,
+            'overdue_count': len(overdue),
+            'blocked_count': len(blocked),
+            'high_priority_count': len(high_priority),
+            'projects_involved': len(project_breakdown),
+            'team_members_involved': len(assignee_breakdown)
+        }
+    
+
     def get_summary(self, tickets: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Get summary statistics for filtered tickets"""
         if not tickets:

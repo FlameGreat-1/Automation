@@ -360,3 +360,263 @@ class InsightsGenerator:
                 'error': response.get('error', 'Failed to generate insights')
             }
     
+    def analyze_feature_development(
+        self,
+        feature_name: str,
+        use_smart_filter: bool = True,
+        include_done: bool = False,
+        save_outputs: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Two-step AI-powered feature development analysis
+        
+        Step 1: Analyzes tickets to discover current development approach
+        Step 2: Evaluates approach against best practices and recommends improvements
+        
+        Args:
+            feature_name: Name of the feature to analyze (e.g., "Invoice", "Authentication")
+            use_smart_filter: Whether to use LLM validation for ticket filtering
+            include_done: Whether to include completed tickets in analysis
+            save_outputs: Whether to save analysis outputs to files
+        
+        Returns:
+            Dictionary containing:
+                - success: Whether analysis completed successfully
+                - feature_name: Name of analyzed feature
+                - tickets_found: Number of tickets analyzed
+                - current_analysis: LLM analysis of current approach
+                - best_practice_evaluation: LLM evaluation and recommendations
+                - metadata: Analysis metadata and statistics
+                - error: Error message if failed
+        """
+        if not feature_name or not feature_name.strip():
+            return {
+                'success': False,
+                'error': 'Feature name cannot be empty'
+            }
+        
+        feature_name = feature_name.strip()
+        
+        print(f"\n{'='*70}")
+        print(f"FEATURE ANALYSIS: {feature_name}")
+        print(f"{'='*70}\n")
+        
+        print(f"[Step 1/3] Searching for tickets related to '{feature_name}'...")
+        
+        try:
+            feature_context = self.filter.get_feature_context(
+                feature_name=feature_name,
+                use_smart_filter=use_smart_filter,
+                llm_client=self.llm if use_smart_filter else None,
+                include_done=include_done
+            )
+            
+            if feature_context.get('total_tickets', 0) == 0:
+                return {
+                    'success': False,
+                    'feature_name': feature_name,
+                    'error': f"No tickets found for feature '{feature_name}'. Try a different feature name or check your workspace data.",
+                    'tickets_found': 0
+                }
+            
+            tickets = feature_context['tickets']
+            total_tickets = feature_context['total_tickets']
+            
+            print(f"  ✓ Found {total_tickets} tickets across {feature_context['projects_involved']} projects")
+            print(f"  ✓ Involving {feature_context['team_members_involved']} team members")
+            
+            if use_smart_filter:
+                print(f"  ✓ Validated {feature_context['validated_matches']} of {feature_context['keyword_matches']} keyword matches\n")
+            else:
+                print()
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'feature_name': feature_name,
+                'error': f"Error finding tickets: {str(e)}",
+                'tickets_found': 0
+            }
+        
+        print(f"[Step 2/3] Analyzing current development approach for '{feature_name}'...")
+        
+        try:
+            context_parts = [
+                f"# Feature Analysis: {feature_name}",
+                f"\n**Total Tickets Analyzed:** {total_tickets}",
+                f"**Projects Involved:** {feature_context['projects_involved']}",
+                f"**Team Members Involved:** {feature_context['team_members_involved']}",
+                f"\n**Status Breakdown:**"
+            ]
+            
+            for status, count in feature_context['status_breakdown'].items():
+                context_parts.append(f"- {status}: {count}")
+            
+            context_parts.append(f"\n**Type Breakdown:**")
+            for ticket_type, count in feature_context['type_breakdown'].items():
+                context_parts.append(f"- {ticket_type}: {count}")
+            
+            context_parts.append(f"\n**Project Distribution:**")
+            for project, count in sorted(feature_context['project_breakdown'].items(), key=lambda x: x[1], reverse=True):
+                context_parts.append(f"- {project}: {count} tickets")
+            
+            if feature_context['overdue_count'] > 0:
+                context_parts.append(f"\n**⚠️ Overdue Tickets:** {feature_context['overdue_count']}")
+            
+            if feature_context['blocked_count'] > 0:
+                context_parts.append(f"**🚫 Blocked Tickets:** {feature_context['blocked_count']}")
+            
+            context_parts.append("\n---\n")
+            
+            fitted_tickets, _ = self.structurer.fit_to_token_limit(
+                tickets,
+                format_type='markdown',
+                include_descriptions=True,
+                reserve_tokens=2000
+            )
+            
+            context_parts.append(f"# Detailed Ticket Analysis ({len(fitted_tickets)} tickets)\n")
+            context_parts.append(
+                self.structurer.format_tickets_markdown(
+                    fitted_tickets,
+                    include_descriptions=True,
+                    add_summary=False
+                )
+            )
+            
+            current_analysis_prompt = "\n".join(context_parts)
+            
+            system_prompt_current = get_prompt(
+                'feature_current_analysis',
+                feature_name=feature_name
+            )
+            
+            current_response = self._call_llm(
+                prompt=current_analysis_prompt,
+                system_prompt=system_prompt_current,
+                temperature=0.7
+            )
+            
+            if not current_response['success']:
+                return {
+                    'success': False,
+                    'feature_name': feature_name,
+                    'tickets_found': total_tickets,
+                    'error': f"Failed to analyze current approach: {current_response.get('error', 'Unknown error')}"
+                }
+            
+            current_analysis = current_response['insights']
+            print(f"  ✓ Current approach analysis complete ({len(current_analysis)} characters)\n")
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'feature_name': feature_name,
+                'tickets_found': total_tickets,
+                'error': f"Error analyzing current approach: {str(e)}"
+            }
+        
+        print(f"[Step 3/3] Evaluating against industry best practices...")
+        
+        try:
+            best_practice_prompt = f"""# Current Development Approach for {feature_name}
+
+{current_analysis}
+
+---
+
+# Evaluation Request
+
+Please evaluate the above development approach for the {feature_name} feature against:
+1. General software engineering best practices
+2. Domain-specific industry standards for {feature_name} features
+3. Scalability, security, and maintainability considerations
+
+Provide specific, actionable recommendations for improvement."""
+            
+            system_prompt_best_practice = get_prompt(
+                'feature_best_practice',
+                feature_name=feature_name
+            )
+            
+            best_practice_response = self._call_llm(
+                prompt=best_practice_prompt,
+                system_prompt=system_prompt_best_practice,
+                temperature=0.7
+            )
+            
+            if not best_practice_response['success']:
+                return {
+                    'success': False,
+                    'feature_name': feature_name,
+                    'tickets_found': total_tickets,
+                    'current_analysis': current_analysis,
+                    'error': f"Failed to evaluate best practices: {best_practice_response.get('error', 'Unknown error')}"
+                }
+            
+            best_practice_evaluation = best_practice_response['insights']
+            print(f"  ✓ Best practice evaluation complete ({len(best_practice_evaluation)} characters)\n")
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'feature_name': feature_name,
+                'tickets_found': total_tickets,
+                'current_analysis': current_analysis,
+                'error': f"Error evaluating best practices: {str(e)}"
+            }
+        
+        if save_outputs:
+            try:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                
+                current_filename = f"feature_{feature_name.replace(' ', '_')}_current_{timestamp}.md"
+                current_filepath = self.output_dir / current_filename
+                with open(current_filepath, 'w', encoding='utf-8') as f:
+                    f.write(f"# Current Development Approach: {feature_name}\n\n")
+                    f.write(f"**Analysis Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"**Tickets Analyzed:** {total_tickets}\n")
+                    f.write(f"**Projects Involved:** {feature_context['projects_involved']}\n\n")
+                    f.write("---\n\n")
+                    f.write(current_analysis)
+                
+                best_practice_filename = f"feature_{feature_name.replace(' ', '_')}_best_practice_{timestamp}.md"
+                best_practice_filepath = self.output_dir / best_practice_filename
+                with open(best_practice_filepath, 'w', encoding='utf-8') as f:
+                    f.write(f"# Best Practice Evaluation: {feature_name}\n\n")
+                    f.write(f"**Analysis Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"**Tickets Analyzed:** {total_tickets}\n\n")
+                    f.write("---\n\n")
+                    f.write(best_practice_evaluation)
+                
+                print(f"✓ Saved current analysis to: {current_filepath}")
+                print(f"✓ Saved best practice evaluation to: {best_practice_filepath}\n")
+                
+            except Exception as e:
+                print(f"⚠ Warning: Failed to save outputs to files: {e}\n")
+        
+        return {
+            'success': True,
+            'feature_name': feature_name,
+            'tickets_found': total_tickets,
+            'current_analysis': current_analysis,
+            'best_practice_evaluation': best_practice_evaluation,
+            'metadata': {
+                'total_tickets': total_tickets,
+                'projects_involved': feature_context['projects_involved'],
+                'team_members_involved': feature_context['team_members_involved'],
+                'status_breakdown': feature_context['status_breakdown'],
+                'type_breakdown': feature_context['type_breakdown'],
+                'project_breakdown': feature_context['project_breakdown'],
+                'overdue_count': feature_context['overdue_count'],
+                'blocked_count': feature_context['blocked_count'],
+                'high_priority_count': feature_context['high_priority_count'],
+                'keyword_matches': feature_context.get('keyword_matches', total_tickets),
+                'validated_matches': feature_context.get('validated_matches', total_tickets),
+                'used_smart_filter': use_smart_filter,
+                'included_done_tickets': include_done,
+                'generated_at': datetime.now().isoformat(),
+                'llm_provider': self.llm.provider,
+                'llm_model': self.llm.model
+            }
+        }

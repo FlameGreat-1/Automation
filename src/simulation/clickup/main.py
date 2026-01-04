@@ -55,6 +55,7 @@ class TicketIntelligenceSystem:
         print("  7. Overviews for ALL projects")
         print("  8. Critical alerts (workspace-wide)")
         print("  9. Workspace analysis")
+        print("  10. Feature analysis (2-step AI evaluation)")
         print()
         print("  0. Exit")
         print()
@@ -86,7 +87,7 @@ class TicketIntelligenceSystem:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        print(f"\n✓ Saved to: {filepath}")
+        print(f"\n✓ Saved: insights/{filename}")
         print("="*70 + "\n")
     
     def run_generate_data(self):
@@ -359,6 +360,150 @@ class TicketIntelligenceSystem:
         print(f"✓ Workspace analysis complete! Generated {successful + 1} insights")
         input("\nPress Enter to continue...")
     
+    def run_feature_analysis(self):
+        """Option 10: Feature Development Analysis (2-step AI evaluation)"""
+        if not self.initialize_insights_system():
+            return
+        
+        print("\n[10] Feature Development Analysis (2-Step AI Evaluation)\n")
+        
+        print("This analysis will:")
+        print("  1. Find all tickets related to your feature across the workspace")
+        print("  2. Analyze the current development approach")
+        print("  3. Evaluate against industry best practices")
+        print("  4. Provide expert recommendations\n")
+        
+        feature_name = input("Enter feature name (e.g., Invoice, Authentication, Dashboard): ").strip()
+        
+        if not feature_name:
+            print("\n✗ Feature name cannot be empty")
+            input("\nPress Enter to continue...")
+            return
+        
+        print("\nUse AI-powered smart filtering?")
+        print("  - YES: More accurate, finds semantically related tickets (slower, uses more tokens)")
+        print("  - NO:  Faster, keyword-only search")
+        
+        use_smart = input("\nUse smart filtering? (y/n, default=y): ").strip().lower()
+        use_smart_filter = use_smart != 'n'
+        
+        include_done_input = input("Include completed tickets? (y/n, default=n): ").strip().lower()
+        include_done = include_done_input == 'y'
+        
+        print(f"\n{'='*70}")
+        print(f"ANALYZING FEATURE: {feature_name}")
+        print(f"{'='*70}\n")
+        
+        if use_smart_filter:
+            print("⚙️  Smart filtering: ENABLED")
+        else:
+            print("⚙️  Smart filtering: DISABLED (keyword search only)")
+        
+        if include_done:
+            print("⚙️  Including: ALL tickets (including completed)")
+        else:
+            print("⚙️  Including: ACTIVE tickets only")
+        
+        print()
+        
+        try:
+            result = self.insights_generator.analyze_feature_development(
+                feature_name=feature_name,
+                use_smart_filter=use_smart_filter,
+                include_done=include_done,
+                save_outputs=False  
+            )
+            
+            if not result['success']:
+                print(f"\n✗ Analysis failed: {result.get('error', 'Unknown error')}")
+                input("\nPress Enter to continue...")
+                return
+            
+            print(f"\n{'='*70}")
+            print("ANALYSIS COMPLETE")
+            print(f"{'='*70}\n")
+            print(f"✓ Tickets analyzed: {result['tickets_found']}")
+            print(f"✓ Projects involved: {result['metadata']['projects_involved']}")
+            print(f"✓ Team members involved: {result['metadata']['team_members_involved']}")
+            
+            if result['metadata']['overdue_count'] > 0:
+                print(f"⚠️  Overdue tickets: {result['metadata']['overdue_count']}")
+            
+            if result['metadata']['blocked_count'] > 0:
+                print(f"🚫 Blocked tickets: {result['metadata']['blocked_count']}")
+            
+            print()
+            
+            print(f"{'='*70}")
+            print("PART 1: CURRENT DEVELOPMENT APPROACH")
+            print(f"{'='*70}\n")
+            
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            current_filename = f"feature_{feature_name.replace(' ', '_')}_current_{timestamp}.md"
+            
+            current_analysis_with_header = f"""# Current Development Approach: {feature_name}
+
+**Analysis Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Tickets Analyzed:** {result['tickets_found']}
+**Projects Involved:** {result['metadata']['projects_involved']}
+**Team Members Involved:** {result['metadata']['team_members_involved']}
+
+---
+
+{result['current_analysis']}
+"""
+            
+            self.stream_and_save(current_analysis_with_header, current_filename)
+            
+            print(f"\n{'='*70}")
+            print("PART 2: BEST PRACTICE EVALUATION & RECOMMENDATIONS")
+            print(f"{'='*70}\n")
+            
+            best_practice_filename = f"feature_{feature_name.replace(' ', '_')}_best_practice_{timestamp}.md"
+            
+            best_practice_with_header = f"""# Best Practice Evaluation: {feature_name}
+
+**Analysis Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Tickets Analyzed:** {result['tickets_found']}
+
+---
+
+{result['best_practice_evaluation']}
+"""
+            
+            self.stream_and_save(best_practice_with_header, best_practice_filename)
+            
+            print(f"\n{'='*70}")
+            print("✓ FEATURE ANALYSIS COMPLETE")
+            print(f"{'='*70}\n")
+            print(f"Feature: {feature_name}")
+            print(f"Tickets analyzed: {result['tickets_found']}")
+            print(f"Files saved: 2")
+            print(f"  - {current_filename}")
+            print(f"  - {best_practice_filename}")
+            print()
+            
+            print("Analysis Details:")
+            print(f"  Smart Filtering: {'Yes' if result['metadata']['used_smart_filter'] else 'No'}")
+            
+            if use_smart_filter:
+                print(f"  Keyword Matches: {result['metadata']['keyword_matches']}")
+                print(f"  Validated Matches: {result['metadata']['validated_matches']}")
+            
+            print()
+        
+        except KeyboardInterrupt:
+            print("\n\n✗ Analysis cancelled by user")
+        
+        except Exception as e:
+            print(f"\n✗ Unexpected error: {e}")
+            print("\nPlease check:")
+            print("  1. Your LLM API key is valid")
+            print("  2. You have internet connection")
+            print("  3. The feature name is correct")
+        
+        input("\nPress Enter to continue...")
+    
     def run(self):
         """Main application loop"""
         while True:
@@ -389,6 +534,8 @@ class TicketIntelligenceSystem:
                 self.run_critical_alerts()
             elif choice == '9':
                 self.run_workspace_analysis()
+            elif choice == '10':
+                self.run_feature_analysis()
             else:
                 print("\n✗ Invalid choice. Please try again.")
                 input("\nPress Enter to continue...")
