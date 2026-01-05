@@ -1,5 +1,4 @@
 """
-Contact Form Scraper - Database Version
 Crawls company websites to find and extract contact forms
 Stores results in MySQL database instead of JSON files
 """

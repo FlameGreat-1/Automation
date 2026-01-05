@@ -53,11 +53,12 @@ class CompaniesDB:
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS urls (
                         id INT AUTO_INCREMENT PRIMARY KEY,
-                        company_id INT NOT NULL,
+                        company_id INT DEFAULT NULL,
                         url VARCHAR(2048) NOT NULL,
-                        category ENUM('base', 'sub', 'additional') NOT NULL,
+                        category ENUM('base', 'sub', 'additional') DEFAULT NULL,
                         label VARCHAR(100) DEFAULT NULL,
                         form TINYINT(1) DEFAULT 0,
+                        product VARCHAR(255) DEFAULT NULL,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE,
                         INDEX idx_company_id (company_id),
@@ -65,6 +66,7 @@ class CompaniesDB:
                         INDEX idx_category (category),
                         INDEX idx_label (label),
                         INDEX idx_form (form),
+                        INDEX idx_product (product),
                         INDEX idx_category_form (category, form)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """)
@@ -76,7 +78,68 @@ class CompaniesDB:
         except Error as e:
             logger.error(f"✗ Error creating tables: {e}")
             return False
-    
+
+    def add_product_column(self) -> bool:
+        """Add product column to existing urls table (migration)"""
+        try:
+            logger.info("📋 Adding product column to urls table...")
+            
+            with get_cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'urls' 
+                    AND COLUMN_NAME = 'product'
+                """)
+                
+                if cursor.fetchone()[0] == 0:
+                    cursor.execute("""
+                        ALTER TABLE urls 
+                        ADD COLUMN product VARCHAR(255) DEFAULT NULL AFTER form,
+                        ADD INDEX idx_product (product)
+                    """)
+                    logger.info("  ✓ Product column added successfully")
+                else:
+                    cursor.execute("""
+                        ALTER TABLE urls 
+                        MODIFY COLUMN product VARCHAR(255) DEFAULT NULL AFTER form
+                    """)
+                    logger.info("  ✓ Product column repositioned after form")
+                
+                cursor.execute("""
+                    SELECT COUNT(*) 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'urls' 
+                    AND COLUMN_NAME = 'company_id'
+                    AND IS_NULLABLE = 'NO'
+                """)
+                
+                if cursor.fetchone()[0] > 0:
+                    cursor.execute("ALTER TABLE urls MODIFY company_id INT DEFAULT NULL")
+                    logger.info("  ✓ Modified company_id to allow NULL")
+                
+                cursor.execute("""
+                    SELECT COUNT(*) 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = 'urls' 
+                    AND COLUMN_NAME = 'category'
+                    AND IS_NULLABLE = 'NO'
+                """)
+                
+                if cursor.fetchone()[0] > 0:
+                    cursor.execute("ALTER TABLE urls MODIFY category ENUM('base', 'sub', 'additional') DEFAULT NULL")
+                    logger.info("  ✓ Modified category to allow NULL")
+            
+            logger.info("✓ Product column migration complete!\n")
+            return True
+            
+        except Error as e:
+            logger.error(f"✗ Error adding product column: {e}")
+            return False
+
     def load_companies_from_json(self, json_file: str = None) -> bool:
         """Load company names from JSON file into database"""
         try:
@@ -337,6 +400,7 @@ class CompaniesDB:
                 cursor.execute("""
                     SELECT category, COUNT(*) 
                     FROM urls 
+                    WHERE category IS NOT NULL
                     GROUP BY category
                 """)
                 for row in cursor.fetchall():
@@ -344,6 +408,9 @@ class CompaniesDB:
                 
                 cursor.execute("SELECT COUNT(*) FROM urls WHERE form = 1")
                 stats['urls_with_forms'] = cursor.fetchone()[0]
+                
+                cursor.execute("SELECT COUNT(*) FROM urls WHERE product IS NOT NULL")
+                stats['product_urls'] = cursor.fetchone()[0]
             
             return stats
             
@@ -368,6 +435,7 @@ class CompaniesDB:
             logger.info(f"      └─ Sub URLs: {stats.get('sub_urls', 0)}")
             logger.info(f"      └─ Additional URLs: {stats.get('additional_urls', 0)}")
             logger.info(f"  📊 URLs with forms: {stats.get('urls_with_forms', 0)}")
+            logger.info(f"  📊 Product URLs: {stats.get('product_urls', 0)}")
             
             with get_cursor() as cursor:
                 cursor.execute("""
@@ -383,6 +451,20 @@ class CompaniesDB:
                     logger.info(f"    ID {row[0]}: {row[1]}")
                     logger.info(f"           URL: {base_url}")
                     logger.info(f"           Status: {row[3]}")
+                
+                cursor.execute("""
+                    SELECT id, url, product, created_at
+                    FROM urls
+                    WHERE product IS NOT NULL
+                    LIMIT 5
+                """)
+                
+                if cursor.rowcount > 0:
+                    logger.info("\n  📋 Sample product URLs:")
+                    for row in cursor.fetchall():
+                        logger.info(f"    ID {row[0]}: {row[1]}")
+                        logger.info(f"           Product: {row[2]}")
+                        logger.info(f"           Created: {row[3]}")
             
             logger.info("\n✓ Verification complete!\n")
             return True
@@ -434,9 +516,10 @@ def main():
         print("3. Only load data from JSON")
         print("4. Verify current setup")
         print("5. Reset database (DELETE ALL DATA)")
+        print("6. Add product column (migration)")
         print("0. Exit")
         
-        choice = input("\nEnter choice (0-5): ").strip()
+        choice = input("\nEnter choice (0-6): ").strip()
         
         if choice == '1':
             if db.create_tables():
@@ -457,6 +540,10 @@ def main():
         elif choice == '5':
             if db.reset_database():
                 db.create_tables()
+        
+        elif choice == '6':
+            db.add_product_column()
+            db.verify_setup()
         
         elif choice == '0':
             logger.info("Exiting...")
