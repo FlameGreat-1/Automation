@@ -21,6 +21,8 @@ from utils.url_utils import detect_url_label
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+PRODUCT_PAGE_LABEL = 'products page'
+
 
 class CompaniesDB:
     """Manages company URL finder database operations"""
@@ -32,7 +34,7 @@ class CompaniesDB:
     def create_tables(self) -> bool:
         """Create all required tables for company URL finder - unified structure"""
         try:
-            logger.info("📋 Creating company tables (unified structure)...")
+            logger.info("📋 Creating company tables...")
             
             with get_cursor() as cursor:
                 cursor.execute("""
@@ -48,13 +50,13 @@ class CompaniesDB:
                         INDEX idx_contact_scraped (contact_scraped)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """)
-                logger.info("  ✓ Table 'companies' created/verified")
+                logger.info("  ✓ Table 'companies' ready")
 
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS urls (
                         id INT AUTO_INCREMENT PRIMARY KEY,
                         company_id INT DEFAULT NULL,
-                        url VARCHAR(2048) NOT NULL,
+                        url VARCHAR(2048) NOT NULL UNIQUE,
                         category ENUM('base', 'sub', 'additional') DEFAULT NULL,
                         label VARCHAR(100) DEFAULT NULL,
                         form TINYINT(1) DEFAULT 0,
@@ -70,76 +72,15 @@ class CompaniesDB:
                         INDEX idx_category_form (category, form)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """)
-                logger.info("  ✓ Table 'urls' created/verified (unified structure)")
+                logger.info("  ✓ Table 'urls' ready")
             
-            logger.info("✓ All company tables created successfully!\n")
+            logger.info("✓ Database tables ready\n")
             return True
             
         except Error as e:
             logger.error(f"✗ Error creating tables: {e}")
             return False
-
-    def add_product_column(self) -> bool:
-        """Add product column to existing urls table (migration)"""
-        try:
-            logger.info("📋 Adding product column to urls table...")
-            
-            with get_cursor() as cursor:
-                cursor.execute("""
-                    SELECT COUNT(*) 
-                    FROM INFORMATION_SCHEMA.COLUMNS 
-                    WHERE TABLE_SCHEMA = DATABASE()
-                    AND TABLE_NAME = 'urls' 
-                    AND COLUMN_NAME = 'product'
-                """)
-                
-                if cursor.fetchone()[0] == 0:
-                    cursor.execute("""
-                        ALTER TABLE urls 
-                        ADD COLUMN product VARCHAR(255) DEFAULT NULL AFTER form,
-                        ADD INDEX idx_product (product)
-                    """)
-                    logger.info("  ✓ Product column added successfully")
-                else:
-                    cursor.execute("""
-                        ALTER TABLE urls 
-                        MODIFY COLUMN product VARCHAR(255) DEFAULT NULL AFTER form
-                    """)
-                    logger.info("  ✓ Product column repositioned after form")
-                
-                cursor.execute("""
-                    SELECT COUNT(*) 
-                    FROM INFORMATION_SCHEMA.COLUMNS 
-                    WHERE TABLE_SCHEMA = DATABASE()
-                    AND TABLE_NAME = 'urls' 
-                    AND COLUMN_NAME = 'company_id'
-                    AND IS_NULLABLE = 'NO'
-                """)
-                
-                if cursor.fetchone()[0] > 0:
-                    cursor.execute("ALTER TABLE urls MODIFY company_id INT DEFAULT NULL")
-                    logger.info("  ✓ Modified company_id to allow NULL")
-                
-                cursor.execute("""
-                    SELECT COUNT(*) 
-                    FROM INFORMATION_SCHEMA.COLUMNS 
-                    WHERE TABLE_SCHEMA = DATABASE()
-                    AND TABLE_NAME = 'urls' 
-                    AND COLUMN_NAME = 'category'
-                    AND IS_NULLABLE = 'NO'
-                """)
-                
-                if cursor.fetchone()[0] > 0:
-                    cursor.execute("ALTER TABLE urls MODIFY category ENUM('base', 'sub', 'additional') DEFAULT NULL")
-                    logger.info("  ✓ Modified category to allow NULL")
-            
-            logger.info("✓ Product column migration complete!\n")
-            return True
-            
-        except Error as e:
-            logger.error(f"✗ Error adding product column: {e}")
-            return False
-
+    
     def load_companies_from_json(self, json_file: str = None) -> bool:
         """Load company names from JSON file into database"""
         try:
@@ -148,7 +89,6 @@ class CompaniesDB:
                 if not json_file:
                     logger.error("✗ COMPANIES_JSON_FILE not set in .env")
                     return False
-                logger.info(f"📄 Using JSON file from .env: {json_file}")
             
             if not os.path.exists(json_file):
                 logger.error(f"✗ JSON file not found: {json_file}")
@@ -161,7 +101,7 @@ class CompaniesDB:
                 logger.warning("⚠ JSON file is empty")
                 return False
             
-            logger.info(f"📥 Loading {len(companies)} companies from JSON...")
+            logger.info(f"📥 Loading {len(companies)} companies...")
             
             inserted = 0
             skipped = 0
@@ -177,16 +117,14 @@ class CompaniesDB:
                         
                         if cursor.rowcount > 0:
                             inserted += 1
-                            logger.info(f"  ✓ Inserted: {company_name}")
                         else:
                             skipped += 1
-                            logger.info(f"  ⊘ Skipped (duplicate): {company_name}")
                     
                     except Error as e:
                         logger.error(f"  ✗ Error inserting '{company_name}': {e}")
                         continue
             
-            logger.info(f"\n✓ Loading complete! Inserted: {inserted}, Skipped: {skipped}\n")
+            logger.info(f"✓ Loaded: {inserted} new, {skipped} existing\n")
             return True
             
         except json.JSONDecodeError as e:
@@ -194,9 +132,6 @@ class CompaniesDB:
             return False
         except Error as e:
             logger.error(f"✗ Database error: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"✗ Unexpected error: {e}")
             return False
     
     def get_pending_companies(self, limit: int = None) -> List[Tuple[int, str]]:
@@ -323,9 +258,6 @@ class CompaniesDB:
         except Error as e:
             logger.error(f"✗ Error fetching sub URLs for company_id {company_id}: {e}")
             return []
-        except Exception as e:
-            logger.error(f"✗ Unexpected error fetching sub URLs: {e}")
-            return []
 
     def update_sub_url_form(self, sub_url: str, has_form: bool) -> bool:
         """Update the form column for a specific URL in urls table"""
@@ -343,18 +275,14 @@ class CompaniesDB:
                 rows_affected = cursor.rowcount
                 
                 if rows_affected > 0:
-                    logger.debug(f"✓ Updated form={form_value} for URL: {sub_url} ({rows_affected} row(s))")
+                    logger.debug(f"✓ Updated form={form_value} for URL: {sub_url}")
                     return True
                 else:
-                    logger.warning(f"⚠ No matching URL found to update: {sub_url}")
-                    logger.warning(f"   Normalized to: {normalized_input}")
+                    logger.warning(f"⚠ No matching URL found: {sub_url}")
                     return False
             
         except Error as e:
             logger.error(f"✗ Error updating form column for {sub_url}: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"✗ Unexpected error updating form column: {e}")
             return False
 
     def get_base_url(self, company_id: int) -> Optional[str]:
@@ -376,6 +304,23 @@ class CompaniesDB:
         except Error as e:
             logger.error(f"✗ Error fetching base URL for company_id {company_id}: {e}")
             return None
+
+    def save_product_page(self, shop_url: str, product_url: str) -> bool:
+        """Save product page URL to database"""
+        try:
+            with get_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO urls (company_id, url, category, label, product, form)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE product = VALUES(product)
+                """, (None, product_url, None, None, PRODUCT_PAGE_LABEL, 0))
+            
+            logger.debug(f"✓ Saved product page: {product_url}")
+            return True
+            
+        except Error as e:
+            logger.error(f"✗ Error saving product page for {shop_url}: {e}")
+            return False
 
     def get_statistics(self) -> Dict:
         """Get database statistics"""
@@ -448,9 +393,7 @@ class CompaniesDB:
                 logger.info("\n  📋 Sample companies:")
                 for row in cursor.fetchall():
                     base_url = row[2] if row[2] else "Not scraped yet"
-                    logger.info(f"    ID {row[0]}: {row[1]}")
-                    logger.info(f"           URL: {base_url}")
-                    logger.info(f"           Status: {row[3]}")
+                    logger.info(f"    ID {row[0]}: {row[1]} | {base_url} | {row[3]}")
                 
                 cursor.execute("""
                     SELECT id, url, product, created_at
@@ -462,9 +405,7 @@ class CompaniesDB:
                 if cursor.rowcount > 0:
                     logger.info("\n  📋 Sample product URLs:")
                     for row in cursor.fetchall():
-                        logger.info(f"    ID {row[0]}: {row[1]}")
-                        logger.info(f"           Product: {row[2]}")
-                        logger.info(f"           Created: {row[3]}")
+                        logger.info(f"    ID {row[0]}: {row[1]} | {row[2]} | {row[3]}")
             
             logger.info("\n✓ Verification complete!\n")
             return True
@@ -516,10 +457,9 @@ def main():
         print("3. Only load data from JSON")
         print("4. Verify current setup")
         print("5. Reset database (DELETE ALL DATA)")
-        print("6. Add product column (migration)")
         print("0. Exit")
         
-        choice = input("\nEnter choice (0-6): ").strip()
+        choice = input("\nEnter choice (0-5): ").strip()
         
         if choice == '1':
             if db.create_tables():
@@ -540,10 +480,6 @@ def main():
         elif choice == '5':
             if db.reset_database():
                 db.create_tables()
-        
-        elif choice == '6':
-            db.add_product_column()
-            db.verify_setup()
         
         elif choice == '0':
             logger.info("Exiting...")

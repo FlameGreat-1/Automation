@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 import re
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 import warnings
@@ -22,12 +23,12 @@ warnings.filterwarnings('ignore', category=InsecureRequestWarning)
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from database.companies_db import CompaniesDB
-from database.connection import execute_query
 
 load_dotenv()
 
 CURRENT_FILE_DIR = Path(__file__).parent
 AUTOMATION_ROOT = CURRENT_FILE_DIR.parent.parent.parent
+PROGRESS_FILE = AUTOMATION_ROOT / 'src' / 'products' / 'crawl' / 'progress.json'
 LOG_DIR = AUTOMATION_ROOT / 'logs'
 LOG_DIR.mkdir(exist_ok=True)
 
@@ -46,6 +47,18 @@ MAX_PAGES_PER_SHOP = int(os.getenv('MAX_PAGES_PER_SHOP', 30))
 CRAWL_DELAY = int(os.getenv('CRAWL_DELAY', 1))
 REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', 12))
 
+def load_last_index():
+    """Load last processed shop index"""
+    if PROGRESS_FILE.exists():
+        with open(PROGRESS_FILE, 'r') as f:
+            data = json.load(f)
+            return data.get('last_index', 0)
+    return 0
+
+def save_last_index(index):
+    """Save last processed shop index"""
+    with open(PROGRESS_FILE, 'w') as f:
+        json.dump({'last_index': index}, f)
 
 class ProductPageCrawler:
     def __init__(self, max_pages=30, delay=1, respect_robots=True):
@@ -77,14 +90,14 @@ class ProductPageCrawler:
             'products', 'shop', 'catalog', 'catalogue', 'store', 'all-products',
             'produkte', 'sortiment', 'artikel', 'waren', 'kollektion', 'angebot',
             'collection', 'items', 'merchandise', 'goods', 'shopping',
-            'category', 'categories', 'browse', 'search'
+            'category', 'categories', 'browse'
         ]
 
         self.product_url_patterns = [
             '/products', '/shop', '/catalog', '/catalogue', '/store',
             '/produkte', '/sortiment', '/artikel', '/kollektion',
             '/all-products', '/collections', '/items',
-            '/category', '/categories', '/browse', '/search',
+            '/category', '/categories', '/browse',
             '/men', '/women', '/kids', '/sale', '/new',
             '/clothing', '/shoes', '/accessories', '/c/'
         ]
@@ -93,7 +106,13 @@ class ProductPageCrawler:
             'cart', 'checkout', 'account', 'login', 'register', 'wishlist',
             'warenkorb', 'kasse', 'konto', 'anmelden', 'wunschliste',
             'blog', 'news', 'about', 'contact', 'faq', 'help',
-            'privacy', 'terms', 'impressum', 'datenschutz'
+            'privacy', 'terms', 'impressum', 'datenschutz',
+            'details', 'detail',
+            'job', 'jobs', 'career', 'careers', 'recruit', 'recruiting',
+            'play.google.com', 'apps/details',
+            'storelocator', 'store-locator', 'find-store', 'locations',
+            'trk.', 'track', 'redirect', 'click',
+            '/oferta/', 'oferta'
         ]
 
         self.product_page_reached = False
@@ -139,6 +158,19 @@ class ProductPageCrawler:
 
     def is_product_url_pattern(self, url):
         url_lower = url.lower()
+        
+        if '/details' in url_lower or '/detail/' in url_lower:
+            return False
+        
+        if any(kw in url_lower for kw in ['job', 'career', 'recruit', 'hiring']):
+            return False
+        
+        if 'play.google.com' in url_lower:
+            return False
+        
+        if '/apps/details' in url_lower or '/app/' in url_lower:
+            return False
+        
         return any(pattern in url_lower for pattern in self.product_url_patterns)
 
     def respects_robots(self, start_url, candidate_url):
@@ -190,32 +222,38 @@ class ProductPageCrawler:
     def detect_product_elements(self, soup):
         product_indicators = 0
         
-        product_classes = [
-            'product', 'item', 'article', 'produkt', 'artikel',
-            'product-card', 'product-item', 'product-grid', 'product-list',
-            'shop-item', 'catalog-item', 'store-item'
+        product_card_classes = [
+            'product-card', 'product-item', 'product-tile',
+            'item-card', 'shop-item', 'catalog-item'
         ]
         
-        product_elements = []
-        for cls in product_classes:
+        product_cards = []
+        for cls in product_card_classes:
             elements = soup.find_all(class_=lambda x: x and cls in x.lower())
-            product_elements.extend(elements)
+            product_cards.extend(elements)
         
-        if len(product_elements) >= 6:
+        if len(product_cards) >= 12:
+            product_indicators += 3
+        elif len(product_cards) >= 8:
             product_indicators += 2
-        elif len(product_elements) >= 3:
+        elif len(product_cards) >= 5:
             product_indicators += 1
         
-        price_patterns = ['price', 'preis', 'cost', 'kosten', 'eur', 'usd', 'gbp', '$', '€']
+        price_patterns = ['price', 'preis', 'cost', 'kosten']
         price_elements = []
         for pattern in price_patterns:
             price_elements.extend(soup.find_all(class_=lambda x: x and pattern in x.lower()))
             price_elements.extend(soup.find_all(attrs={'data-price': True}))
             price_elements.extend(soup.find_all(attrs={'itemprop': 'price'}))
         
-        if len(price_elements) >= 8:
+        currency_symbols = soup.find_all(string=re.compile(r'[\$€£¥₹]'))
+        price_elements.extend(currency_symbols)
+        
+        if len(price_elements) >= 12:
+            product_indicators += 3
+        elif len(price_elements) >= 8:
             product_indicators += 2
-        elif len(price_elements) >= 3:
+        elif len(price_elements) >= 5:
             product_indicators += 1
         
         cart_buttons = soup.find_all(['button', 'a'], string=lambda t: t and any(
@@ -229,45 +267,57 @@ class ProductPageCrawler:
             kw in x.lower() for kw in ['add-to-cart', 'add-cart', 'buy-button', 'kaufen', 'addtocart']
         ))
         
-        if len(cart_buttons) >= 4 or len(cart_button_classes) >= 4:
+        total_cart_buttons = len(cart_buttons) + len(cart_button_classes)
+        
+        if total_cart_buttons >= 8:
+            product_indicators += 3
+        elif total_cart_buttons >= 5:
             product_indicators += 2
-        elif len(cart_buttons) >= 2 or len(cart_button_classes) >= 2:
+        elif total_cart_buttons >= 3:
             product_indicators += 1
         
         grid_containers = soup.find_all(class_=lambda x: x and any(
             kw in x.lower() for kw in [
-                'product-grid', 'product-list', 'item-grid', 'catalog-grid', 'shop-grid',
-                'product-listing', 'product-collection', 'category-products', 'plp'
+                'product-grid', 'product-list', 'item-grid', 'catalog-grid',
+                'product-listing', 'product-collection', 'category-products'
             ]
         ))
         
-        if grid_containers:
+        if len(grid_containers) >= 2:
+            product_indicators += 2
+        elif len(grid_containers) >= 1:
             product_indicators += 1
         
         schema_products = soup.find_all(attrs={'itemtype': lambda x: x and 'product' in x.lower()})
-        if len(schema_products) >= 2:
+        if len(schema_products) >= 5:
+            product_indicators += 2
+        elif len(schema_products) >= 3:
             product_indicators += 1
         
         pagination = soup.find_all(class_=lambda x: x and any(
             kw in x.lower() for kw in ['pagination', 'pager', 'page-numbers', 'paginate']
         ))
-        if pagination:
-            product_indicators += 1
+        if len(pagination) >= 1:
+            product_indicators += 2
         
         filters = soup.find_all(class_=lambda x: x and any(
             kw in x.lower() for kw in ['filter', 'sort', 'refine', 'facet']
         ))
-        if len(filters) >= 2:
+        if len(filters) >= 3:
+            product_indicators += 2
+        elif len(filters) >= 2:
             product_indicators += 1
         
         link_repetition = self.detect_repeating_links(soup)
-        if link_repetition >= 10:
+        if link_repetition >= 15:
+            product_indicators += 3
+        elif link_repetition >= 10:
             product_indicators += 2
-        elif link_repetition >= 5:
+        elif link_repetition >= 6:
             product_indicators += 1
         
         if self.detect_ecommerce_platform(soup):
-            product_indicators += 2
+            product_indicators += 1
         
         return product_indicators
 
@@ -275,9 +325,10 @@ class ProductPageCrawler:
         if self.is_excluded_url(url):
             return False
         
-        url_score = 0
-        if self.is_product_url_pattern(url):
-            url_score = 2
+        if not self.is_product_url_pattern(url):
+            return False
+        
+        url_score = 3
         
         url_lower = url.lower()
         if any(kw in url_lower for kw in self.product_page_keywords):
@@ -287,7 +338,7 @@ class ProductPageCrawler:
         
         total_score = url_score + element_score
         
-        return total_score >= 2
+        return total_score >= 6
 
     def find_product_links(self, soup, base_url):
         product_links = []
@@ -441,19 +492,15 @@ class ProductPageCrawler:
 
 if __name__ == "__main__":
     print("="*70)
-    print("PRODUCT PAGE CRAWLER - DATABASE VERSION (ENHANCED)")
+    print("PRODUCT PAGE CRAWLER")
     print("="*70)
-    print(f"Configuration:")
-    print(f"  - Max shops to crawl: {MAX_SHOPS_TO_CRAWL}")
-    print(f"  - Max pages per shop: {MAX_PAGES_PER_SHOP}")
-    print(f"  - Delay between requests: {CRAWL_DELAY}s")
-    print(f"  - Detection threshold: 2 (lowered for better coverage)")
+    print(f"Max shops: {MAX_SHOPS_TO_CRAWL} | Max pages per shop: {MAX_PAGES_PER_SHOP}")
+    print(f"Delay: {CRAWL_DELAY}s | Timeout: {REQUEST_TIMEOUT}s")
     print("="*70 + "\n")
 
     db = CompaniesDB()
 
     urls_file = AUTOMATION_ROOT / 'src' / 'products' / 'urls' / 'urls.txt'
-    progress_file = AUTOMATION_ROOT / 'src' / 'products' / 'crawl' / 'progress.txt'
     
     if not urls_file.exists():
         print(f"✗ URLs file not found: {urls_file}")
@@ -464,38 +511,28 @@ if __name__ == "__main__":
         shop_urls = [line.strip() for line in f if line.strip()]
 
     if not shop_urls:
-        print("✗ No shop URLs found in urls.txt. Exiting.")
+        print("✗ No shop URLs found in urls.txt")
         logger.error("No shop URLs found in urls.txt")
         exit(1)
 
     shop_urls = shop_urls[:MAX_SHOPS_TO_CRAWL]
-
-    start_index = 0
-    if progress_file.exists():
-        try:
-            with open(progress_file, 'r') as f:
-                start_index = int(f.read().strip())
-            print(f"Resuming from shop #{start_index + 1}")
-            logger.info(f"Resuming from index {start_index}")
-        except:
-            start_index = 0
-
-    print(f"Loaded {len(shop_urls)} shop URLs from urls.txt")
-    print(f"Processing shops from #{start_index + 1} to #{len(shop_urls)}\n")
+    
+    last_index = load_last_index()
+    shops_to_process = shop_urls[last_index:]
+    
+    print(f"Total shops: {len(shop_urls)} | Starting from: {last_index + 1} | Remaining: {len(shops_to_process)}\n")
 
     product_pages_found = 0
     shops_processed = 0
     shops_failed = 0
 
-    for i in range(start_index, len(shop_urls)):
-        shop_url = shop_urls[i]
+    for i, shop_url in enumerate(shops_to_process):
+        current_index = last_index + i
         
         if not shop_url.startswith('http'):
             shop_url = f'https://{shop_url}'
 
-        print(f"\n{'='*70}")
-        print(f"[{i + 1}/{len(shop_urls)}] Processing: {shop_url}")
-        print('='*70)
+        print(f"[{current_index + 1}/{len(shop_urls)}] {shop_url}")
 
         crawler = ProductPageCrawler(
             max_pages=MAX_PAGES_PER_SHOP,
@@ -507,58 +544,42 @@ if __name__ == "__main__":
             product_page_url = crawler.crawl(shop_url)
 
             if product_page_url:
-                try:
-                    execute_query("""
-                        INSERT INTO urls (company_id, url, category, label, product, form)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON DUPLICATE KEY UPDATE product = VALUES(product)
-                    """, (None, product_page_url, None, None, 'products page', 0), fetch=False)
-
+                success = db.save_product_page(shop_url, product_page_url)
+                
+                if success:
                     product_pages_found += 1
                     shops_processed += 1
+                    print(f"  ✓ Saved: {product_page_url}\n")
                     logger.info(f"Saved product page: {product_page_url}")
-                    print(f"\n  ✓ Product page saved to database: {product_page_url}")
-
-                except Exception as e:
-                    logger.error(f"Error saving product page for {shop_url}: {e}")
-                    print(f"  ✗ Failed to save to database: {e}")
+                else:
                     shops_failed += 1
+                    print(f"  ✗ Failed to save\n")
+                    logger.error(f"Error saving product page for {shop_url}")
             else:
                 shops_processed += 1
-                print(f"\n  ⊘ No product catalog page found for {shop_url}")
+                print(f"  ⊘ No product page found\n")
                 logger.warning(f"No product page found for {shop_url}")
 
         except Exception as e:
             shops_failed += 1
+            print(f"  ✗ Error: {e}\n")
             logger.error(f"Error crawling {shop_url}: {e}")
-            print(f"  ✗ Error crawling shop: {e}")
+        
+        save_last_index(current_index + 1)
 
-        print(f"\n  Summary:")
-        print(f"    - Pages visited: {len(crawler.visited)}")
-        print(f"    - Product page found: {'Yes' if crawler.product_page_found else 'No'}")
-
-        with open(progress_file, 'w') as f:
-            f.write(str(i + 1))
-
-    if progress_file.exists():
-        progress_file.unlink()
-
-    print(f"\n\n{'='*70}")
+    print("="*70)
     print("FINAL SUMMARY")
-    print('='*70)
-    print(f"Total shops processed: {shops_processed}")
-    print(f"Total shops failed: {shops_failed}")
-    print(f"Product pages found: {product_pages_found}")
-    print(f"Success rate: {(product_pages_found/(shops_processed + shops_failed)*100) if (shops_processed + shops_failed) > 0 else 0:.1f}%")
-    print('='*70 + "\n")
+    print("="*70)
+    print(f"Processed: {shops_processed} | Found: {product_pages_found} | Failed: {shops_failed}")
+    print(f"Success rate: {(product_pages_found/shops_processed*100) if shops_processed else 0:.1f}%")
+    print("="*70 + "\n")
 
     try:
         stats = db.get_statistics()
-        print("Database Statistics:")
-        print(f"  - Total URLs in database: {stats.get('total_urls', 0)}")
-        print(f"  - Product URLs: {stats.get('product_urls', 0)}")
+        print(f"Total URLs in database: {stats.get('total_urls', 0)}")
+        print(f"Product URLs: {stats.get('product_urls', 0)}\n")
     except Exception as e:
         logger.error(f"Error fetching statistics: {e}")
 
-    print("\n✓ Product page crawling complete!")
+    print("✓ Crawling complete!")
     logger.info("Product page crawling completed successfully")
