@@ -18,6 +18,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 SIMULATION_ROOT = SRC_ROOT / "simulation" / "clickup"
 DATASETS_DIR = SIMULATION_ROOT / "datasets"
 INSIGHTS_OUTPUT_DIR = DATASETS_DIR / "insights"
+BEST_PRACTICES_PATH = 'src/simulation/clickup/md/best_practices.md'
 
 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
 INSIGHTS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -106,6 +107,7 @@ __all__ = [
     'SIMULATION_ROOT',
     'DATASETS_DIR',
     'INSIGHTS_OUTPUT_DIR',
+    'BEST_PRACTICES_PATH',
     'NUM_PROJECTS',
     'NUM_USERS',
     'NUM_TICKETS',

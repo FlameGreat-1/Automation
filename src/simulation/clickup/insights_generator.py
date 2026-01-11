@@ -1,5 +1,5 @@
 """
-Enterprise-Grade Ticket Insights Generator
+Ticket Insights Generator
 Orchestrates filtering, structuring, and LLM calls to generate actionable insights
 """
 
@@ -12,7 +12,7 @@ from filter import TicketFilter
 from structurer import TicketStructurer
 from llm_client import LLMClient
 from prompts import get_prompt
-from config import MAX_TOKENS_INPUT, MAX_TOKENS_OUTPUT, INSIGHTS_OUTPUT_DIR
+from config import MAX_TOKENS_INPUT, MAX_TOKENS_OUTPUT, INSIGHTS_OUTPUT_DIR, BEST_PRACTICES_PATH
 
 
 class InsightsGenerator:
@@ -30,6 +30,28 @@ class InsightsGenerator:
         self.now = datetime.now()
         self.output_dir = Path(INSIGHTS_OUTPUT_DIR)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.best_practices_content = self._load_best_practices()
+    
+    def _load_best_practices(self) -> Optional[str]:
+        """Load best practices document from file"""
+        try:
+            best_practices_path = Path(BEST_PRACTICES_PATH)
+            
+            if not best_practices_path.exists():
+                print(f"⚠ Warning: Best practices file not found at {BEST_PRACTICES_PATH}")
+                print(f"  Best practice evaluation will proceed without the reference document.\n")
+                return None
+            
+            with open(best_practices_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            print(f"✓ Loaded best practices document ({len(content)} characters)\n")
+            return content
+            
+        except Exception as e:
+            print(f"⚠ Warning: Failed to load best practices document: {e}")
+            print(f"  Best practice evaluation will proceed without the reference document.\n")
+            return None
     
     def _call_llm(
         self,
@@ -359,7 +381,7 @@ class InsightsGenerator:
                 'success': False,
                 'error': response.get('error', 'Failed to generate insights')
             }
-    
+
     def analyze_feature_development(
         self,
         feature_name: str,
@@ -519,20 +541,42 @@ class InsightsGenerator:
         print(f"[Step 3/3] Evaluating against industry best practices...")
         
         try:
-            best_practice_prompt = f"""# Current Development Approach for {feature_name}
-
-{current_analysis}
-
----
-
-# Evaluation Request
-
-Please evaluate the above development approach for the {feature_name} feature against:
-1. General software engineering best practices
-2. Domain-specific industry standards for {feature_name} features
-3. Scalability, security, and maintainability considerations
-
-Provide specific, actionable recommendations for improvement."""
+            best_practice_prompt_parts = []
+            
+            best_practice_prompt_parts.append(f"# Current Development Approach for {feature_name}\n")
+            best_practice_prompt_parts.append(current_analysis)
+            best_practice_prompt_parts.append("\n---\n")
+            
+            if self.best_practices_content:
+                best_practice_prompt_parts.append("# Company Best Practices Reference\n")
+                best_practice_prompt_parts.append(self.best_practices_content)
+                best_practice_prompt_parts.append("\n---\n")
+            
+            best_practice_prompt_parts.append("# Evaluation Request\n")
+            
+            if self.best_practices_content:
+                best_practice_prompt_parts.append(
+                    f"Using the Company Best Practices Reference document provided above, "
+                    f"please evaluate the current development approach for the '{feature_name}' feature.\n\n"
+                    f"Your evaluation should:\n"
+                    f"1. Identify which specific best practices from the reference document apply to this feature\n"
+                    f"2. Assess how well the current approach aligns with those practices\n"
+                    f"3. Highlight gaps or deviations from recommended practices\n"
+                    f"4. Provide specific, actionable recommendations with reasoning\n"
+                    f"5. Explain which tools, processes, or methodologies from the best practices should be adopted\n"
+                    f"6. Prioritize recommendations by impact and feasibility\n\n"
+                    f"Focus on practices most relevant to the '{feature_name}' feature type and current development stage."
+                )
+            else:
+                best_practice_prompt_parts.append(
+                    f"Please evaluate the current development approach for the '{feature_name}' feature against:\n"
+                    f"1. General software engineering best practices\n"
+                    f"2. Domain-specific industry standards for {feature_name} features\n"
+                    f"3. Scalability, security, and maintainability considerations\n\n"
+                    f"Provide specific, actionable recommendations for improvement."
+                )
+            
+            best_practice_prompt = "\n".join(best_practice_prompt_parts)
             
             system_prompt_best_practice = get_prompt(
                 'feature_best_practice',
@@ -615,6 +659,7 @@ Provide specific, actionable recommendations for improvement."""
                 'validated_matches': feature_context.get('validated_matches', total_tickets),
                 'used_smart_filter': use_smart_filter,
                 'included_done_tickets': include_done,
+                'used_best_practices_document': self.best_practices_content is not None,
                 'generated_at': datetime.now().isoformat(),
                 'llm_provider': self.llm.provider,
                 'llm_model': self.llm.model
